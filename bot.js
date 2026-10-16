@@ -72,6 +72,143 @@ class Base85 {
   }
 }
 
+class CustomBase64 {
+  static evalLuaExpr(expr) {
+    try {
+      const cleaned = expr.replace(/\s+/g, "")
+      if (!/^[\d+\-*/%().]+$/.test(cleaned)) return null
+      const result = Function('"use strict"; return (' + cleaned + ')')()
+      if (typeof result !== "number" || !Number.isFinite(result)) return null
+      return Math.floor(result)
+    } catch (e) {
+      return null
+    }
+  }
+
+  static parseValue(val) {
+    val = val.trim()
+    if (/^-?\d+$/.test(val)) return parseInt(val)
+    if (/^0[xX][0-9a-fA-F]+$/.test(val)) return parseInt(val, 16)
+    if (/^[\d\s+\-*/%().]+$/.test(val)) return this.evalLuaExpr(val)
+    return null
+  }
+
+  static extractAlphabets(code) {
+    const alphabets = []
+    const tableRe = /(?:local\s+)?(\w+)\s*=\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g
+    let tableMatch
+    while ((tableMatch = tableRe.exec(code)) !== null) {
+      const [, name, body] = tableMatch
+      const entries = {}
+      const entryRe = /(?:\[["']([^"']+)["']\]|\[(\d+)\]|([A-Za-z_]\w*))\s*=\s*([^,}\n]+)/g
+      let entryMatch
+      while ((entryMatch = entryRe.exec(body)) !== null) {
+        const key = entryMatch[1] !== undefined ? entryMatch[1] :
+                    entryMatch[2] !== undefined ? entryMatch[2] :
+                    entryMatch[3]
+        const valStr = entryMatch[4].trim()
+        const val = this.parseValue(valStr)
+        if (val !== null && val >= 0 && val <= 63 && key && key.length === 1) {
+          entries[val] = key
+        }
+      }
+      const keys = Object.keys(entries)
+      if (keys.length >= 60 && keys.length <= 68) {
+        const alphabet = []
+        let ok = true
+        for (let i = 0; i < 64; i++) {
+          if (entries[i] === undefined) { ok = false; break }
+          let ch = entries[i]
+          if (ch.startsWith("\\x")) {
+            const hm = ch.match(/^\\x([0-9a-fA-F]{2})/)
+            if (hm) ch = String.fromCharCode(parseInt(hm[1], 16))
+          } else if (ch.startsWith("\\")) {
+            const dm = ch.match(/^\\(\d{1,3})/)
+            if (dm) ch = String.fromCharCode(parseInt(dm[1], 10))
+          }
+          if (ch.length !== 1) { ok = false; break }
+          alphabet.push(ch)
+        }
+        if (ok && alphabet.length === 64) {
+          alphabets.push({ name, alphabet, entries })
+        }
+      }
+    }
+    return alphabets
+  }
+
+  static decode(str, alphabet) {
+    if (!str || !alphabet || alphabet.length !== 64) return null
+    const lookup = {}
+    for (let i = 0; i < 64; i++) lookup[alphabet[i]] = i
+    const out = []
+    let i = 0
+    while (i < str.length) {
+      const chunk = str.slice(i, i + 4)
+      const origLen = chunk.length
+      if (origLen === 0) break
+      let clean = chunk
+      let padding = 0
+      while (clean.endsWith("=")) {
+        clean = clean.slice(0, -1)
+        padding++
+      }
+      while (clean.length < 4) clean += alphabet[0]
+      let v = 0n
+      let valid = true
+      for (const c of clean) {
+        if (lookup[c] === undefined) { valid = false; break }
+        v = v * 64n + BigInt(lookup[c])
+      }
+      if (!valid) { i += origLen; continue }
+      const bytes = [
+        Number((v >> 16n) & 0xFFn),
+        Number((v >> 8n) & 0xFFn),
+        Number(v & 0xFFn)
+      ]
+      const outCount = 3 - padding
+      for (let k = 0; k < outCount; k++) out.push(bytes[k])
+      i += origLen
+    }
+    return Buffer.from(out)
+  }
+
+  static findStringTables(code) {
+    const tables = []
+    const re = /(?:local\s+)?(\w+)\s*=\s*\{([\s\S]*?)\}/g
+    let m
+    while ((m = re.exec(code)) !== null) {
+      const [, name, body] = m
+      const strs = []
+      const strRe = /"((?:[^"\\]|\\.)*)"/g
+      let sm
+      while ((sm = strRe.exec(body)) !== null) {
+        strs.push(sm[1])
+      }
+      if (strs.length >= 5 && strs.length < 5000) {
+        const allB64 = strs.every(s => /^[A-Za-z0-9+/]+=*$/.test(s) || s === "")
+        if (allB64) {
+          tables.push({ name, strings: strs, size: strs.length })
+        }
+      }
+    }
+    return tables
+  }
+
+  static bytesToString(bytes) {
+    const str = bytes.toString("utf-8")
+    let printable = 0
+    for (const c of str) {
+      const code = c.charCodeAt(0)
+      if (code >= 32 && code <= 126) printable++
+    }
+    if (str.length > 0 && printable / str.length > 0.7) {
+      return { type: "text", value: str }
+    }
+    return { type: "hex", value: bytes.toString("hex") }
+  }
+}
+
 class WeAreDevs {
   static ALPHA_V1 = ['0', "'", ')', 'L', 'O', 'C', 'F', '!', 'Q', 'M', 's', '"', '5', 'q', 'X', 'h', 'K', '/', '9', 'E', '.', 'e', 'j', 'm', 'u', '=', '7', 'S', '8', ';', 'b', '+', '_', '@', 'i', 'd', 'R', 'W', 'I', 't', '\\', '4', ',', '*', 'c', ']', 'g', '%', '[', '-', 'Z', 'P', 'U', 'N', 'T', 'D', '&', 'V', '(', '<', '^', 'l', 'a', 'p', 'G', 'k', 'Y', 'J', '?', '2', 'A', 'n', ':', 'o', 'H', '#', 'f', 'B', '1', '3', '6', '$', 'r', '>', '`']
   static extractStrings(code, alphabet, prefix) {
@@ -310,8 +447,6 @@ class Detector {
       { name: "Xen", patterns: [/Xen.*obf/i], weight: 20, confidence: 65 },
       { name: "Krnl", patterns: [/krnl.*obf/i], weight: 20, confidence: 65 },
       { name: "Veil", patterns: [/veil.*obf/i], weight: 20, confidence: 65 },
-      { name: "LuaObf", patterns: [/LuaObf/i], weight: 20, confidence: 65 },
-      { name: "Nuke", patterns: [/nuke.*obf/i], weight: 20, confidence: 65 },
     ]
     const matches = []
     for (const { name, patterns, weight, confidence } of checks) {
@@ -327,7 +462,6 @@ class Detector {
     if (/\[0x[0-9a-fA-F]+\]/.test(c)) genericSignals.push("hex keys")
     if (/return\s*\(\s*function\s*\(\s*\.\.\.\s*\)/.test(c)) genericSignals.push("IIFE pattern")
     if (/bit32\.bxor|bit\.bxor/.test(c)) genericSignals.push("XOR ops")
-    if (/string\.reverse/.test(c)) genericSignals.push("string.reverse")
     if (c.length > 30000) genericSignals.push("large code")
     if (c.length > 100000) genericSignals.push("very large (>100KB)")
     return {
@@ -349,6 +483,7 @@ class Deobfuscator {
       escapesDecoded: 0, base64Decoded: 0, base32Decoded: 0, base58Decoded: 0, base91Decoded: 0,
       hexDecoded: 0, octalDecoded: 0, urlDecoded: 0,
       wearedevsDecoded: 0, ascii85Decoded: 0, xorDecoded: 0,
+      customB64Alphabets: 0, customB64Decoded: 0,
       stringsFound: 0, stringRefsResolved: 0, tablesFound: 0, mathSimplified: 0,
       antiDebugRemoved: 0, recursivePasses: 0, entropy: 0,
       extractedAlphabet: false, alphabetPasses: 0,
@@ -363,6 +498,7 @@ class Deobfuscator {
     this.wearedevsSamples = []
     this.xorResults = []
     this.alphabet = null
+    this.customB64Results = []
   }
 
   async run() {
@@ -371,7 +507,7 @@ class Deobfuscator {
     this.log.push(`type: ${this.detection.name} (${this.detection.confidence}%)`)
 
     if (this.detection.name === "WeAreDevs") {
-      this.log.push("WeAreDevs detected - extracting alphabet")
+      this.log.push("WeAreDevs - extracting alphabet")
       const extracted = Base85.extractAlphabet(this.code)
       if (extracted) {
         this.alphabet = extracted
@@ -412,6 +548,9 @@ class Deobfuscator {
     this.decodeAscii85Layer()
     this.decodeStringChar()
     this.simplifyMath()
+
+    this.decodeCustomBase64()
+
     this.stringTableAnalyzer.code = this.code
     this.stringTableAnalyzer.findTables()
     this.stats.tablesFound = this.stringTableAnalyzer.tables.length
@@ -514,6 +653,35 @@ class Deobfuscator {
       } catch (e) {}
       return m
     })
+  }
+
+  decodeCustomBase64() {
+    const alphabets = CustomBase64.extractAlphabets(this.code)
+    if (alphabets.length === 0) return
+    this.stats.customB64Alphabets = alphabets.length
+    this.log.push(`custom base64 alphabets: ${alphabets.length}`)
+    const tables = CustomBase64.findStringTables(this.code)
+    if (tables.length === 0) return
+    this.log.push(`string tables found: ${tables.length}`)
+    for (const table of tables) {
+      const alphabet = alphabets[0].alphabet
+      const decoded = []
+      for (const s of table.strings.slice(0, 200)) {
+        if (!s) continue
+        try {
+          const bytes = CustomBase64.decode(s, alphabet)
+          if (bytes && bytes.length > 0) {
+            const result = CustomBase64.bytesToString(bytes)
+            decoded.push({ raw: s, decoded: result.value, type: result.type, length: bytes.length })
+            this.stats.customB64Decoded++
+          }
+        } catch (e) {}
+      }
+      if (decoded.length > 0) {
+        this.customB64Results.push({ tableName: table.name, alphabetName: alphabets[0].name, strings: decoded })
+      }
+    }
+    if (this.stats.customB64Decoded > 0) this.log.push(`custom b64 decoded: ${this.stats.customB64Decoded} strings`)
   }
 
   simplifyMath() {
@@ -661,6 +829,14 @@ class Deobfuscator {
     const waBlock = this.wearedevsSamples.length > 0
       ? this.wearedevsSamples.map(s => `"${s.raw.slice(0, 40)}" -> "${s.decoded.slice(0, 60)}"`).join("\n")
       : "None"
+    const customB64Block = this.customB64Results.length > 0
+      ? this.customB64Results.map(r => 
+          `Table: ${r.tableName} (alphabet: ${r.alphabetName})\n` +
+          r.strings.slice(0, 25).map(s => 
+            `  [${s.type}] "${s.raw.slice(0, 40)}" -> "${s.decoded.slice(0, 80)}"`
+          ).join("\n")
+        ).join("\n\n")
+      : "None"
     return [
       "DEOBFUSCATION REPORT", "====================",
       `Source: ${source}`, `Time: ${time}ms`, "",
@@ -675,12 +851,15 @@ class Deobfuscator {
       `Base91: ${this.stats.base91Decoded}`, `Hex: ${this.stats.hexDecoded}`,
       `Octal: ${this.stats.octalDecoded}`, `URL: ${this.stats.urlDecoded}`,
       `Ascii85: ${this.stats.ascii85Decoded}`, `WeAreDevs: ${this.stats.wearedevsDecoded}`,
+      `CustomB64 Alphabets: ${this.stats.customB64Alphabets}`,
+      `CustomB64 Decoded: ${this.stats.customB64Decoded}`,
       `Alphabet passes: ${this.stats.alphabetPasses}`, `XOR: ${this.stats.xorDecoded}`,
       `Strings: ${this.stats.stringsFound}`, `Refs: ${this.stats.stringRefsResolved}`,
       `Tables: ${this.stats.tablesFound}`, `Math: ${this.stats.mathSimplified}`,
       `Anti-debug: ${this.stats.antiDebugRemoved}`, `Layers: ${this.stats.recursivePasses}`,
       `Entropy: ${this.stats.entropy}`, "",
       "WEAREDEVS SAMPLES", waBlock,
+      "", "CUSTOM BASE64 RESULTS", customB64Block,
       "", "XOR BRUTE RESULTS", xorBlock,
       "", "URLS", this.urls.join("\n") || "None",
       "", "WEBHOOKS", this.webhooks.join("\n") || "None",
@@ -699,8 +878,8 @@ class Logger {
     console.log(`${colors[level] || ""}[${level}] ${msg}\x1b[0m`, Object.keys(data).length ? data : "")
   }
 }
-const logger = new Logger()
 
+const logger = new Logger()
 const client = new Client({ intents: [GatewayIntentBits.Guilds] })
 
 const commands = [
@@ -737,8 +916,8 @@ async function processAndReply(interaction, code, source) {
       { name: "Time", value: `${time}ms`, inline: true },
       { name: "Size", value: `${d.stats.originalSize} -> ${d.stats.finalSize}`, inline: true },
       { name: "WeAreDevs", value: String(d.stats.wearedevsDecoded), inline: true },
-      { name: "Base64", value: String(d.stats.base64Decoded), inline: true },
-      { name: "Base32/58/91", value: `${d.stats.base32Decoded}/${d.stats.base58Decoded}/${d.stats.base91Decoded}`, inline: true },
+      { name: "CustomB64", value: `${d.stats.customB64Alphabets} A / ${d.stats.customB64Decoded} S`, inline: true },
+      { name: "Base64/32/58/91", value: `${d.stats.base64Decoded}/${d.stats.base32Decoded}/${d.stats.base58Decoded}/${d.stats.base91Decoded}`, inline: true },
       { name: "Hex/Octal", value: `${d.stats.hexDecoded}/${d.stats.octalDecoded}`, inline: true },
       { name: "Entropy", value: String(d.stats.entropy), inline: true },
     )
@@ -762,14 +941,15 @@ client.on("interactionCreate", async (interaction) => {
   try {
     if (interaction.commandName === "help") {
       const embed = new EmbedBuilder().setColor("#5865F2").setTitle("Deobf Bot")
-        .setDescription("Lua deobfuscator — auto alphabet extraction")
+        .setDescription("Lua deobfuscator — full encodings support")
         .addFields(
           { name: "/deobf", value: "Deobfuscate code text" },
           { name: "/deobf_url", value: "Deobfuscate from URL" },
           { name: "/deobf_file", value: "Deobfuscate uploaded file" },
           { name: "/detect", value: "Detect obfuscator type" },
           { name: "Encodings", value: "Base64, Base32, Base58, Base85, Base91, Hex, Octal, Ascii85, URL, XOR" },
-          { name: "Obfuscators", value: "WeAreDevs, Luraph, Moonsec, IronBrew, Prometheus, Luarmor, luaobfuscator, Boronide, Hercules, and more" },
+          { name: "Custom", value: "Custom Base64 with extracted alphabet" },
+          { name: "Obfuscators", value: "WeAreDevs, Luraph, Moonsec, IronBrew, Prometheus, Luarmor, luaobfuscator, and more" },
         )
       return interaction.editReply({ embeds: [embed] })
     }
