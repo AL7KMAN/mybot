@@ -435,6 +435,100 @@ class StringTableAnalyzer {
   }
 }
 
+class VMAnalyzer {
+  static analyze(code) {
+    const info = {
+      hasDispatchLoop: /while\s+true\s+do|repeat\s+until\s+false|::\w+::\s*goto/.test(code),
+      usesBitOps: /bit32\.(bxor|band|bor|lshift|rshift|bnot)/.test(code),
+      usesGetfenv: /\bgetfenv\b|\bsetfenv\b/.test(code),
+      usesLoadstring: /\bloadstring\b|\bload\s*\(/.test(code),
+      usesNewproxy: /\bnewproxy\b/.test(code),
+      usesSetmetatable: /\bsetmetatable\b/.test(code),
+      usesUnpack: /\bunpack\b|\btable\.unpack\b/.test(code),
+      usesSelect: /\bselect\b/.test(code),
+      registerCount: (code.match(/\bR\d+\b/g) || []).length,
+      upvalueCount: (code.match(/\bU\d+\b/g) || []).length,
+      hexKeyCount: (code.match(/\[0x[0-9a-fA-F]+\]/g) || []).length,
+      decimalKeyCount: (code.match(/\[\d{1,5}\]/g) || []).length,
+      hasTableWrap: /setmetatable\s*\(\s*\{\s*\[80\]\s*=\s*unpack/.test(code),
+      hasLuraphSig: /return\s+setmetatable\s*\(\s*\{\s*\[80\]\s*=/.test(code),
+      hasWeAreDevsSig: /wearedevs\.net\/obfuscator/.test(code),
+      hasMoonsecSig: /MoonSec_StringsHiddenAttr|MoonSec V3/.test(code),
+      hasIronbrewSig: /ironbrew/i.test(code),
+      hasLuarmorSig: /luarmor\.net|luraph_runtime1/.test(code),
+      hasFuncFactory: /local\s+function\s+\w+\s*\([^)]*\)\s*return\s+function/.test(code),
+      hasWhileTrue: /while\s+true\s+do/.test(code),
+      hasGoto: /\bgoto\s+\w+/.test(code),
+      hasInlineTable: /\{[^{}]*\[[^\]]+\]\s*=\s*[^{}]+\}/.test(code),
+      stringCharCount: (code.match(/string\.char/g) || []).length,
+      stringByteCount: (code.match(/string\.byte/g) || []).length,
+      stringSubCount: (code.match(/string\.sub/g) || []).length,
+      tableConcatCount: (code.match(/table\.concat/g) || []).length,
+      tableInsertCount: (code.match(/table\.insert/g) || []).length,
+    }
+    let score = 0
+    if (info.hasDispatchLoop) score += 3
+    if (info.usesBitOps) score += 2
+    if (info.usesGetfenv) score += 2
+    if (info.usesLoadstring) score += 1
+    if (info.usesNewproxy) score += 2
+    if (info.usesSetmetatable) score += 1
+    if (info.usesUnpack) score += 1
+    if (info.usesSelect) score += 1
+    if (info.hasTableWrap) score += 4
+    if (info.hasFuncFactory) score += 2
+    if (info.stringCharCount > 20) score += 2
+    if (info.hexKeyCount > 20) score += 2
+    if (info.registerCount > 10) score += 3
+    info.isVM = score >= 5
+    info.score = score
+    info.confidence = Math.min(100, Math.round((score / 20) * 100))
+    if (info.hasWeAreDevsSig) info.likelyFamily = "WeAreDevs"
+    else if (info.hasLuraphSig) info.likelyFamily = "Luraph"
+    else if (info.hasMoonsecSig) info.likelyFamily = "Moonsec"
+    else if (info.hasIronbrewSig) info.likelyFamily = "IronBrew"
+    else if (info.hasLuarmorSig) info.likelyFamily = "Luarmor"
+    else if (info.isVM) info.likelyFamily = "Generic VM"
+    else info.likelyFamily = "Unknown"
+    return info
+  }
+}
+
+class AntiTamperDetector {
+  static detect(code) {
+    const patterns = [
+      { name: "debug.getinfo", regex: /debug\.getinfo\s*\(/g, severity: "medium" },
+      { name: "debug.sethook", regex: /debug\.sethook\s*\(/g, severity: "high" },
+      { name: "debug.traceback", regex: /debug\.traceback\s*\(/g, severity: "low" },
+      { name: "debug.getlocal", regex: /debug\.getlocal\s*\(/g, severity: "medium" },
+      { name: "debug.getupvalue", regex: /debug\.getupvalue\s*\(/g, severity: "medium" },
+      { name: "os.clock guard", regex: /os\.clock\s*\(\s*\)\s*[-+]?\s*\d+/g, severity: "high" },
+      { name: "tick guard", regex: /tick\s*\(\s*\)\s*[-+]?\s*\d+/g, severity: "high" },
+      { name: "env marker (table key)", regex: /getfenv\s*\(\s*\)\s*\[\s*\w+\s*\]\s*=/g, severity: "high" },
+      { name: "global silencing print", regex: /\bprint\s*=\s*function\s*\(\s*\)\s*end/g, severity: "medium" },
+      { name: "global silencing error", regex: /\berror\s*=\s*function\s*\(\s*\)\s*end/g, severity: "medium" },
+      { name: "while true do end", regex: /while\s+true\s+do\s+end/g, severity: "high" },
+      { name: "pcall debug", regex: /pcall\s*\(\s*debug\./g, severity: "medium" },
+      { name: "getfenv check", regex: /type\s*\(\s*getfenv\s*\(\s*\)\s*\[/g, severity: "medium" },
+      { name: "wall-clock guard", regex: /not\s*\([^)]*or\s*\w+\s*<\s*os\.clock/g, severity: "high" },
+      { name: "jobid binding", regex: /game\.JobId/g, severity: "low" },
+      { name: "tamper detection", regex: /Hooked|hookfunction|hookmetamethod/g, severity: "medium" },
+    ]
+    const found = []
+    let totalSeverity = 0
+    const severityMap = { low: 1, medium: 2, high: 3 }
+    for (const p of patterns) {
+      const matches = code.match(p.regex)
+      if (matches && matches.length > 0) {
+        found.push({ name: p.name, count: matches.length, severity: p.severity })
+        totalSeverity += severityMap[p.severity] * Math.min(matches.length, 3)
+      }
+    }
+    const riskLevel = totalSeverity >= 15 ? "HIGH" : totalSeverity >= 7 ? "MEDIUM" : totalSeverity >= 2 ? "LOW" : "NONE"
+    return { patterns: found, totalSeverity, riskLevel, count: found.length }
+  }
+}
+
 class Detector {
   constructor(code) {
     this.code = code
@@ -571,11 +665,17 @@ class Deobfuscator {
     this.customB64Results = []
     this.layers = []
     this.detection = null
+    this.vmInfo = null
+    this.antiTamper = null
   }
   async run() {
     this.log.push("started")
     this.detection = this.detector.detect()
     this.log.push(`type: ${this.detection.name} (${this.detection.confidence}%)`)
+    this.vmInfo = VMAnalyzer.analyze(this.code)
+    this.log.push(`VM score: ${this.vmInfo.score} (isVM: ${this.vmInfo.isVM})`)
+    this.antiTamper = AntiTamperDetector.detect(this.code)
+    this.log.push(`Anti-tamper: ${this.antiTamper.count} patterns (risk: ${this.antiTamper.riskLevel})`)
     const layerAnalysis = this.detector.analyzeLayers(this.original)
     this.layers = layerAnalysis.layers
     this.stats.isNested = this.layers.length > 1
@@ -963,6 +1063,31 @@ class Deobfuscator {
     }
     this.code = out.join("\n")
   }
+  buildRecommendations() {
+    const recs = []
+    if (this.stats.isNested) {
+      recs.push(`This script has ${this.stats.layerCount} layers. Use /layers to unwrap step by step.`)
+    }
+    if (this.vmInfo?.isVM) {
+      recs.push(`VM structure detected (confidence ${this.vmInfo.confidence}%). Full deobfuscation requires a runtime sandbox.`)
+    }
+    if (this.antiTamper?.riskLevel === "HIGH") {
+      recs.push(`High-risk anti-tamper detected. This script will deadlock or kick in unprotected environments.`)
+    }
+    if (this.detection.name.includes("Luraph") || this.detection.name.includes("Moonsec") || this.detection.name.includes("Luarmor")) {
+      recs.push(`This obfuscator requires specialized tools (Python/C# based). JS-only deobfuscation has limits.`)
+    }
+    if (this.stats.wearedevsDecoded > 0) {
+      recs.push(`WeAreDevs strings decoded. Bytecode layer requires a runtime to fully unwrap.`)
+    }
+    if (this.detection.name === "Clean") {
+      recs.push(`No obfuscation detected. Script is clean.`)
+    }
+    if (recs.length === 0) {
+      recs.push(`Try /deobf_file with a fresh sample, or use /detect to verify the type.`)
+    }
+    return recs
+  }
 }
 
 async function fetchCodeFromUrl(url) {
@@ -985,7 +1110,7 @@ async function readAttachment(attachment) {
 
 function buildReport(result) {
   let r = "═══════════════════════════════════════════════\n"
-  r += "           DEOBFUSCATION REPORT (V6)\n"
+  r += "         DEOBFUSCATION REPORT (V7)\n"
   r += "═══════════════════════════════════════════════\n\n"
   r += "🎯 DETECTION\n"
   r += `   Type: ${result.detection.name}\n`
@@ -998,6 +1123,29 @@ function buildReport(result) {
     r += `   Generic: ${result.detection.generic.join(", ")}\n`
   }
   r += "\n"
+  if (result.vmInfo) {
+    r += "🖥️ VM ANALYSIS\n"
+    r += `   Is VM: ${result.vmInfo.isVM ? "YES ✅" : "No"}\n`
+    r += `   Score: ${result.vmInfo.score}/20 (confidence ${result.vmInfo.confidence}%)\n`
+    r += `   Family: ${result.vmInfo.likelyFamily}\n`
+    r += `   Dispatch Loop: ${result.vmInfo.hasDispatchLoop ? "Yes" : "No"}\n`
+    r += `   Bit Ops: ${result.vmInfo.usesBitOps ? "Yes" : "No"}\n`
+    r += `   Getfenv: ${result.vmInfo.usesGetfenv ? "Yes" : "No"}\n`
+    r += `   Newproxy: ${result.vmInfo.usesNewproxy ? "Yes" : "No"}\n`
+    r += `   Register Count: ${result.vmInfo.registerCount}\n`
+    r += `   Hex Keys: ${result.vmInfo.hexKeyCount}\n`
+    r += `   Function Factory: ${result.vmInfo.hasFuncFactory ? "Yes" : "No"}\n`
+    r += "\n"
+  }
+  if (result.antiTamper) {
+    r += "🛡️ ANTI-TAMPER ANALYSIS\n"
+    r += `   Risk Level: ${result.antiTamper.riskLevel}\n`
+    r += `   Total Patterns: ${result.antiTamper.count}\n`
+    for (const p of result.antiTamper.patterns) {
+      r += `   [${p.severity.toUpperCase()}] ${p.name} x${p.count}\n`
+    }
+    r += "\n"
+  }
   if (result.layers.length > 0) {
     r += "🧅 LAYER ANALYSIS (ONION)\n"
     for (const layer of result.layers) {
@@ -1032,6 +1180,12 @@ function buildReport(result) {
   r += `   Recursive passes: ${result.stats.recursivePasses}\n`
   if (result.stats.extractedAlphabet) r += `   Alphabet: EXTRACTED (85 chars, ${result.stats.alphabetPasses} passes)\n`
   r += "\n"
+  const recs = result.buildRecommendations()
+  if (recs.length > 0) {
+    r += "💡 RECOMMENDATIONS\n"
+    for (const rec of recs) r += `   • ${rec}\n`
+    r += "\n"
+  }
   if (result.stringTableAnalyzer && result.stringTableAnalyzer.tables.length > 0) {
     r += "📚 STRING TABLES\n"
     for (const t of result.stringTableAnalyzer.tables.slice(0, 10)) {
@@ -1131,6 +1285,13 @@ const commands = [
     .addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(true))
     .toJSON(),
   new SlashCommandBuilder()
+    .setName("vmdetect")
+    .setDescription("Analyze VM structure of an obfuscated script")
+    .addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(false))
+    .addStringOption(o => o.setName("url").setDescription("Or a URL to the code").setRequired(false))
+    .addAttachmentOption(o => o.setName("file").setDescription("Or a file").setRequired(false))
+    .toJSON(),
+  new SlashCommandBuilder()
     .setName("help")
     .setDescription("Show available commands")
     .toJSON(),
@@ -1173,40 +1334,90 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "help") {
     const embed = new EmbedBuilder()
       .setColor(0x00aaff)
-      .setTitle("📖 Deobfuscator Bot V6")
-      .setDescription("Advanced Lua deobfuscation with nested-layer detection")
+      .setTitle("📖 Deobfuscator Bot V7")
+      .setDescription("Advanced Lua deobfuscation with VM analysis, anti-tamper detection, and nested-layer support")
       .addFields(
         { name: "/deobf code:<code>", value: "Deobfuscate code directly" },
         { name: "/deobf_url url:<link>", value: "Deobfuscate from URL (Pastebin/GitHub/Gist)" },
         { name: "/deobf_file file:<file>", value: "Deobfuscate from uploaded file" },
         { name: "/detect", value: "Detect obfuscator type + line count + nested layers" },
         { name: "/layers code:<code>", value: "Analyze nested obfuscation (onion)" },
+        { name: "/vmdetect", value: "Analyze VM structure + anti-tamper patterns" },
         { name: "/help", value: "Show this message" },
-        { name: "✨ Features", value: "• 25+ obfuscator detection\n• 16+ encodings decoded\n• Nested layer (onion) analysis\n• WeAreDevs ASCII85 + VM\n• Custom Base64 alphabets\n• XOR brute force\n• Webhook/key extraction" }
+        { name: "✨ V7 Features", value: "• VM structure analyzer\n• Anti-tamper detector\n• Nested layer (onion) analysis\n• WeAreDevs multi-alphabet\n• Smart recommendations\n• 18+ obfuscator detection\n• 16+ encodings decoded" }
       )
-      .setFooter({ text: "V6 • Advanced" })
+      .setFooter({ text: "V7 • Advanced" })
     await interaction.reply({ embeds: [embed] })
+    return
+  }
+
+  if (interaction.commandName === "vmdetect") {
+    await interaction.deferReply()
+    try {
+      const { code, source } = await resolveCode(interaction)
+      const vm = VMAnalyzer.analyze(code)
+      const at = AntiTamperDetector.detect(code)
+
+      const color = vm.isVM ? 0xff6600 : 0x00ff88
+      const embed = new EmbedBuilder()
+        .setColor(color)
+        .setTitle("🖥️ VM Structure Analysis")
+        .setDescription(`**Source:** ${source}`)
+        .addFields(
+          { name: "🤖 Is VM", value: vm.isVM ? `**YES** (score ${vm.score}/20)` : "No", inline: true },
+          { name: "🎚️ Confidence", value: `${vm.confidence}%`, inline: true },
+          { name: "👨‍👩‍👧 Family", value: vm.likelyFamily, inline: true },
+        )
+      const structure = []
+      if (vm.hasDispatchLoop) structure.push("• Dispatch Loop")
+      if (vm.usesBitOps) structure.push("• Bit32 operations")
+      if (vm.usesGetfenv) structure.push("• getfenv/setfenv")
+      if (vm.usesLoadstring) structure.push("• loadstring/load")
+      if (vm.usesNewproxy) structure.push("• newproxy")
+      if (vm.usesSetmetatable) structure.push("• setmetatable")
+      if (vm.usesUnpack) structure.push("• unpack")
+      if (vm.usesSelect) structure.push("• select")
+      if (vm.hasFuncFactory) structure.push("• Function factory pattern")
+      if (vm.hasTableWrap) structure.push("• Table wrapper [80]")
+      if (vm.hasGoto) structure.push("• Goto/Labels")
+      if (structure.length > 0) {
+        embed.addFields({ name: "🔍 Detected Constructs", value: structure.join("\n").slice(0, 1000) })
+      }
+      const counts = []
+      if (vm.registerCount > 0) counts.push(`Registers: ${vm.registerCount}`)
+      if (vm.hexKeyCount > 0) counts.push(`Hex Keys: ${vm.hexKeyCount}`)
+      if (vm.decimalKeyCount > 0) counts.push(`Decimal Keys: ${vm.decimalKeyCount}`)
+      if (vm.stringCharCount > 0) counts.push(`string.char: ${vm.stringCharCount}`)
+      if (vm.stringByteCount > 0) counts.push(`string.byte: ${vm.stringByteCount}`)
+      if (vm.stringSubCount > 0) counts.push(`string.sub: ${vm.stringSubCount}`)
+      if (vm.tableConcatCount > 0) counts.push(`table.concat: ${vm.tableConcatCount}`)
+      if (counts.length > 0) {
+        embed.addFields({ name: "📊 Counts", value: counts.join(" • ").slice(0, 1000) })
+      }
+      if (at.count > 0) {
+        const atText = at.patterns.map(p => `[${p.severity.toUpperCase()}] ${p.name} × ${p.count}`).join("\n")
+        embed.addFields({ name: `🛡️ Anti-Tamper (Risk: ${at.riskLevel})`, value: atText.slice(0, 1000) })
+      } else {
+        embed.addFields({ name: "🛡️ Anti-Tamper", value: "No patterns detected ✅" })
+      }
+      embed.setTimestamp().setFooter({ text: "V7 VM Analyzer" })
+      await interaction.editReply({ embeds: [embed] })
+    } catch (error) {
+      await interaction.editReply({ content: `❌ Error: ${error.message}` })
+    }
     return
   }
 
   if (interaction.commandName === "detect") {
     await interaction.deferReply()
     try {
-      const codeOpt = interaction.options.getString("code")
-      const urlOpt = interaction.options.getString("url")
-      const fileOpt = interaction.options.getAttachment("file")
-      let code = null
-      let source = null
-      if (codeOpt) { code = codeOpt; source = "Direct input" }
-      else if (urlOpt) { code = await fetchCodeFromUrl(urlOpt); source = `URL: ${urlOpt}` }
-      else if (fileOpt) { code = await readAttachment(fileOpt); source = `File: ${fileOpt.name}` }
-      else throw new Error("Provide code, URL, or file")
-
+      const { code, source } = await resolveCode(interaction)
       const detector = new Detector(code)
       const detection = detector.detect()
       const lines = code.split("\n").length
       const bytes = code.length
       const layerAnalysis = detector.analyzeLayers(code)
+      const vm = VMAnalyzer.analyze(code)
 
       const embed = new EmbedBuilder()
         .setColor(detection.name === "Clean" ? 0x00ff88 : 0xffaa00)
@@ -1218,9 +1429,8 @@ client.on("interactionCreate", async (interaction) => {
           { name: "📊 Lines", value: `${lines.toLocaleString()}`, inline: true },
           { name: "💾 Size", value: `${bytes.toLocaleString()} bytes`, inline: true },
           { name: "🧅 Nested Layers", value: layerAnalysis.layers.length > 1 ? `**YES** (${layerAnalysis.layers.length} layers)` : "No", inline: true },
-          { name: "🎭 Obfuscated", value: detection.name === "Clean" ? "No ✅" : "Yes 🔒", inline: true },
+          { name: "🖥️ VM", value: vm.isVM ? `**YES** (${vm.confidence}%)` : "No", inline: true },
         )
-
       if (detection.signals.length > 0) {
         embed.addFields({ name: "🔖 Matched Signatures", value: detection.signals.slice(0, 8).map(s => `• ${s}`).join("\n").slice(0, 1000) })
       }
@@ -1231,8 +1441,7 @@ client.on("interactionCreate", async (interaction) => {
         const layerText = layerAnalysis.layers.map(l => `**Layer ${l.depth}:** ${l.name} (${l.confidence}%) — ${l.lines} lines`).join("\n")
         embed.addFields({ name: "🧅 Onion Layers", value: layerText.slice(0, 1000) })
       }
-      embed.setTimestamp().setFooter({ text: "V6 Detection Engine" })
-
+      embed.setTimestamp().setFooter({ text: "V7 Detection Engine" })
       await interaction.editReply({ embeds: [embed] })
     } catch (error) {
       await interaction.editReply({ content: `❌ Error: ${error.message}` })
@@ -1255,7 +1464,6 @@ client.on("interactionCreate", async (interaction) => {
           { name: "📊 Original", value: `${code.length.toLocaleString()} bytes`, inline: true },
           { name: "📉 Final", value: `${analysis.final.length.toLocaleString()} bytes`, inline: true },
         )
-
       if (analysis.layers.length === 0) {
         embed.setDescription("No obfuscation layers detected — code appears clean.")
       } else {
@@ -1265,11 +1473,9 @@ client.on("interactionCreate", async (interaction) => {
         }).join("\n\n")
         embed.setDescription(layerText.slice(0, 4000))
       }
-
       const buffer = Buffer.from(analysis.final, "utf-8")
       const attachment = new AttachmentBuilder(buffer, { name: "unwrapped.lua" })
-      embed.setTimestamp().setFooter({ text: "V6 Onion Engine" })
-
+      embed.setTimestamp().setFooter({ text: "V7 Onion Engine" })
       await interaction.editReply({ embeds: [embed], files: [attachment] })
     } catch (error) {
       await interaction.editReply({ content: `❌ Error: ${error.message}` })
@@ -1294,17 +1500,19 @@ client.on("interactionCreate", async (interaction) => {
 
       const embed = new EmbedBuilder()
         .setColor(deobf.stats.isNested ? 0x9933ff : 0x00ff88)
-        .setTitle("🚀 Deobfuscation Complete (V6)")
+        .setTitle("🚀 Deobfuscation Complete (V7)")
         .setDescription(`**Source:** ${source}`)
         .addFields(
           { name: "🎯 Type", value: deobf.detection.name, inline: true },
           { name: "🎚️ Confidence", value: `${deobf.detection.confidence}%`, inline: true },
           { name: "🧅 Layers", value: deobf.stats.isNested ? `${deobf.stats.layerCount}` : "1", inline: true },
+          { name: "🖥️ VM", value: deobf.vmInfo?.isVM ? `Yes (${deobf.vmInfo.confidence}%)` : "No", inline: true },
+          { name: "🛡️ Anti-Tamper", value: deobf.antiTamper?.riskLevel || "NONE", inline: true },
+          { name: "⚡ Reduced", value: `${ratio}%`, inline: true },
           { name: "📊 Original", value: `${deobf.stats.originalLines.toLocaleString()} lines\n${deobf.stats.originalSize.toLocaleString()} bytes`, inline: true },
           { name: "📉 Final", value: `${deobf.stats.finalLines.toLocaleString()} lines\n${deobf.stats.finalSize.toLocaleString()} bytes`, inline: true },
-          { name: "⚡ Reduced", value: `${ratio}%`, inline: true },
+          { name: "⏱️ Time", value: `${elapsed}ms`, inline: true },
         )
-
       const decoders = []
       if (deobf.stats.wearedevsDecoded > 0) decoders.push(`WeAreDevs: ${deobf.stats.wearedevsDecoded}`)
       if (deobf.stats.base64Decoded > 0) decoders.push(`Base64: ${deobf.stats.base64Decoded}`)
@@ -1322,7 +1530,6 @@ client.on("interactionCreate", async (interaction) => {
       if (deobf.stats.antiDebugRemoved > 0) decoders.push(`AntiDebug: ${deobf.stats.antiDebugRemoved}`)
       if (deobf.stats.xorDecoded > 0) decoders.push(`XOR: ${deobf.stats.xorDecoded}`)
       if (deobf.stats.extractedAlphabet) decoders.push(`Alphabet: extracted`)
-
       if (decoders.length > 0) {
         embed.addFields({ name: "🔓 Decoded", value: decoders.join(" • ").slice(0, 1000) })
       }
@@ -1330,15 +1537,18 @@ client.on("interactionCreate", async (interaction) => {
         const layerText = deobf.layers.map(l => `L${l.depth}: ${l.name} (${l.confidence}%)`).join(" → ")
         embed.addFields({ name: "🧅 Layer Chain", value: layerText.slice(0, 1000) })
       }
+      const recs = deobf.buildRecommendations()
+      if (recs.length > 0) {
+        embed.addFields({ name: "💡 Recommendations", value: recs.slice(0, 5).map(r => `• ${r}`).join("\n").slice(0, 1000) })
+      }
       if (deobf.webhooks.length > 0) {
         embed.addFields({ name: "⚠️ Webhooks", value: deobf.webhooks.slice(0, 3).map(w => `\`${w.slice(0, 80)}\``).join("\n").slice(0, 1000) })
       }
       if (deobf.keys.length > 0) {
         embed.addFields({ name: "🔑 Possible Keys", value: deobf.keys.slice(0, 5).map(k => `\`${k}\``).join("\n").slice(0, 1000) })
       }
-      embed.addFields({ name: "⏱️ Time", value: `${elapsed}ms`, inline: true })
       embed.addFields({ name: "📈 Entropy", value: `${deobf.stats.entropy}`, inline: true })
-      embed.setTimestamp().setFooter({ text: "V6 • Advanced Deobfuscation" })
+      embed.setTimestamp().setFooter({ text: "V7 • Advanced Deobfuscation" })
 
       const report = buildReport(deobf)
       const buffer = Buffer.from(report, "utf-8")
@@ -1370,7 +1580,7 @@ if (!process.env.CLIENT_ID) {
   process.exit(1)
 }
 
-Logger.log("INFO", "Starting bot V6...")
+Logger.log("INFO", "Starting bot V7...")
 client.login(process.env.DISCORD_TOKEN).catch((error) => {
   Logger.log("ERROR", "Login failed", { error: error.message })
   process.exit(1)
