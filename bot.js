@@ -443,7 +443,7 @@ class Deobfuscator {
 }
 
 const logger = new Logger()
-const client = new Client({ intents: [GatewayIntents.Guilds || GatewayIntentBits.Guilds] })
+const client = new Client({ intents: [GatewayIntentBits.Guilds] })
 
 const commands = [
   new SlashCommandBuilder().setName("deobf").setDescription("Deobfuscate Lua code text").addStringOption(o => o.setName("code").setDescription("Obfuscated code").setRequired(true)).toJSON(),
