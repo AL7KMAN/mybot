@@ -1,6 +1,14 @@
 const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } = require("discord.js")
 const { REST } = require("@discordjs/rest")
 const { Routes } = require("discord-api-types/v9")
+const fetch = require("node-fetch")
+
+class Logger {
+  static log(level, msg, data = {}) {
+    const colors = { INFO: "\x1b[36m", WARN: "\x1b[33m", ERROR: "\x1b[31m", SUCCESS: "\x1b[32m", DEBUG: "\x1b[35m" }
+    console.log(`${colors[level] || "\x1b[0m"}[${level}] ${msg}\x1b[0m`, data)
+  }
+}
 
 class Base85 {
   static buildLookup(alphabet) {
@@ -25,12 +33,7 @@ class Base85 {
         v = v * 85n + BigInt(lookup[c])
       }
       if (!valid) { i += 1; continue }
-      const bytes = [
-        Number((v >> 24n) & 0xFFn),
-        Number((v >> 16n) & 0xFFn),
-        Number((v >> 8n) & 0xFFn),
-        Number(v & 0xFFn)
-      ]
+      const bytes = [Number((v >> 24n) & 0xFFn), Number((v >> 16n) & 0xFFn), Number((v >> 8n) & 0xFFn), Number(v & 0xFFn)]
       const count = origLen - 1
       for (let k = 0; k < count; k++) out.push(bytes[k])
       i += origLen
@@ -80,11 +83,8 @@ class CustomBase64 {
       const result = Function('"use strict"; return (' + cleaned + ')')()
       if (typeof result !== "number" || !Number.isFinite(result)) return null
       return Math.floor(result)
-    } catch (e) {
-      return null
-    }
+    } catch (e) { return null }
   }
-
   static parseValue(val) {
     val = val.trim()
     if (/^-?\d+$/.test(val)) return parseInt(val)
@@ -92,7 +92,6 @@ class CustomBase64 {
     if (/^[\d\s+\-*/%().]+$/.test(val)) return this.evalLuaExpr(val)
     return null
   }
-
   static extractAlphabets(code) {
     const alphabets = []
     const tableRe = /(?:local\s+)?(\w+)\s*=\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g
@@ -103,14 +102,10 @@ class CustomBase64 {
       const entryRe = /(?:\[["']([^"']+)["']\]|\[(\d+)\]|([A-Za-z_]\w*))\s*=\s*([^,}\n]+)/g
       let entryMatch
       while ((entryMatch = entryRe.exec(body)) !== null) {
-        const key = entryMatch[1] !== undefined ? entryMatch[1] :
-                    entryMatch[2] !== undefined ? entryMatch[2] :
-                    entryMatch[3]
+        const key = entryMatch[1] !== undefined ? entryMatch[1] : entryMatch[2] !== undefined ? entryMatch[2] : entryMatch[3]
         const valStr = entryMatch[4].trim()
         const val = this.parseValue(valStr)
-        if (val !== null && val >= 0 && val <= 63 && key && key.length === 1) {
-          entries[val] = key
-        }
+        if (val !== null && val >= 0 && val <= 63 && key && key.length === 1) entries[val] = key
       }
       const keys = Object.keys(entries)
       if (keys.length >= 60 && keys.length <= 68) {
@@ -129,14 +124,11 @@ class CustomBase64 {
           if (ch.length !== 1) { ok = false; break }
           alphabet.push(ch)
         }
-        if (ok && alphabet.length === 64) {
-          alphabets.push({ name, alphabet, entries })
-        }
+        if (ok && alphabet.length === 64) alphabets.push({ name, alphabet, entries })
       }
     }
     return alphabets
   }
-
   static decode(str, alphabet) {
     if (!str || !alphabet || alphabet.length !== 64) return null
     const lookup = {}
@@ -149,10 +141,7 @@ class CustomBase64 {
       if (origLen === 0) break
       let clean = chunk
       let padding = 0
-      while (clean.endsWith("=")) {
-        clean = clean.slice(0, -1)
-        padding++
-      }
+      while (clean.endsWith("=")) { clean = clean.slice(0, -1); padding++ }
       while (clean.length < 4) clean += alphabet[0]
       let v = 0n
       let valid = true
@@ -161,18 +150,13 @@ class CustomBase64 {
         v = v * 64n + BigInt(lookup[c])
       }
       if (!valid) { i += origLen; continue }
-      const bytes = [
-        Number((v >> 16n) & 0xFFn),
-        Number((v >> 8n) & 0xFFn),
-        Number(v & 0xFFn)
-      ]
+      const bytes = [Number((v >> 16n) & 0xFFn), Number((v >> 8n) & 0xFFn), Number(v & 0xFFn)]
       const outCount = 3 - padding
       for (let k = 0; k < outCount; k++) out.push(bytes[k])
       i += origLen
     }
     return Buffer.from(out)
   }
-
   static findStringTables(code) {
     const tables = []
     const re = /(?:local\s+)?(\w+)\s*=\s*\{([\s\S]*?)\}/g
@@ -182,19 +166,14 @@ class CustomBase64 {
       const strs = []
       const strRe = /"((?:[^"\\]|\\.)*)"/g
       let sm
-      while ((sm = strRe.exec(body)) !== null) {
-        strs.push(sm[1])
-      }
+      while ((sm = strRe.exec(body)) !== null) strs.push(sm[1])
       if (strs.length >= 5 && strs.length < 5000) {
         const allB64 = strs.every(s => /^[A-Za-z0-9+/]+=*$/.test(s) || s === "")
-        if (allB64) {
-          tables.push({ name, strings: strs, size: strs.length })
-        }
+        if (allB64) tables.push({ name, strings: strs, size: strs.length })
       }
     }
     return tables
   }
-
   static bytesToString(bytes) {
     const str = bytes.toString("utf-8")
     let printable = 0
@@ -202,40 +181,41 @@ class CustomBase64 {
       const code = c.charCodeAt(0)
       if (code >= 32 && code <= 126) printable++
     }
-    if (str.length > 0 && printable / str.length > 0.7) {
-      return { type: "text", value: str }
-    }
+    if (str.length > 0 && printable / str.length > 0.7) return { type: "text", value: str }
     return { type: "hex", value: bytes.toString("hex") }
   }
 }
 
 class WeAreDevs {
-  static ALPHA_V1 = ['0', "'", ')', 'L', 'O', 'C', 'F', '!', 'Q', 'M', 's', '"', '5', 'q', 'X', 'h', 'K', '/', '9', 'E', '.', 'e', 'j', 'm', 'u', '=', '7', 'S', '8', ';', 'b', '+', '_', '@', 'i', 'd', 'R', 'W', 'I', 't', '\\', '4', ',', '*', 'c', ']', 'g', '%', '[', '-', 'Z', 'P', 'U', 'N', 'T', 'D', '&', 'V', '(', '<', '^', 'l', 'a', 'p', 'G', 'k', 'Y', 'J', '?', '2', 'A', 'n', ':', 'o', 'H', '#', 'f', 'B', '1', '3', '6', '$', 'r', '>', '`']
-  static extractStrings(code, alphabet, prefix) {
+  static ALPHA_V1 = "^W!,tK_PN+C+=WOGJ@d3bL;Zc<Rv8x&m$(q)e]9#-{?f5u:My2B|/z4Y7[h0o*%S6A\\Q._K`X1VITp\"DEURgjFlsnHikw".split("")
+  static replaceAll(code, alphabet, prefix) {
+    let count = 0
     const esc = prefix === "^" ? "\\^" : prefix
-    const re = new RegExp(`"${esc}([^"]+)"`, "g")
-    const results = []
+    const re = new RegExp(`"${esc}([^"]{4,})"`, "g")
+    const newCode = code.replace(re, (m, encoded) => {
+      try {
+        const decoded = Base85.decode(encoded, alphabet)
+        if (decoded && /^[\x20-\x7E\s]*$/.test(decoded) && decoded.length > 0) {
+          count++
+          return JSON.stringify(decoded)
+        }
+      } catch (e) {}
+      return m
+    })
+    return { code: newCode, count }
+  }
+  static extractStrings(code, alphabet, prefix) {
+    const out = []
+    const esc = prefix === "^" ? "\\^" : prefix
+    const re = new RegExp(`"${esc}([^"]{4,})"`, "g")
     let m
     while ((m = re.exec(code)) !== null) {
       try {
-        const dec = Base85.decode(m[1], alphabet)
-        if (dec && /^[\x20-\x7E\s]*$/.test(dec) && dec.length > 0) results.push({ raw: m[1], decoded: dec })
+        const decoded = Base85.decode(m[1], alphabet)
+        if (decoded && decoded.length > 0) out.push({ encoded: m[1], decoded })
       } catch (e) {}
     }
-    return results
-  }
-  static replaceAll(code, alphabet, prefix) {
-    const esc = prefix === "^" ? "\\^" : prefix
-    const re = new RegExp(`"${esc}([^"]+)"`, "g")
-    let count = 0
-    const replaced = code.replace(re, (full, payload) => {
-      try {
-        const dec = Base85.decode(payload, alphabet)
-        if (dec && /^[\x20-\x7E\s]*$/.test(dec) && dec.length > 0) { count++; return JSON.stringify(dec) }
-      } catch (e) {}
-      return full
-    })
-    return { code: replaced, count }
+    return out
   }
 }
 
@@ -243,13 +223,20 @@ class Decoders {
   static base64(s) {
     if (s.length < 8 || s.length % 4 !== 0) return null
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(s)) return null
-    try { const dec = Buffer.from(s, "base64").toString("utf-8"); if (this.isPrintable(dec) && dec.length >= 3) return dec } catch (e) {}
+    try {
+      const dec = Buffer.from(s, "base64").toString("utf-8")
+      if (this.isPrintable(dec) && dec.length >= 3) return dec
+    } catch (e) {}
     return null
   }
   static base64url(s) {
     if (s.length < 8) return null
     if (!/^[A-Za-z0-9_-]+={0,2}$/.test(s)) return null
-    try { const fixed = s.replace(/-/g, "+").replace(/_/g, "/"); const dec = Buffer.from(fixed, "base64").toString("utf-8"); if (this.isPrintable(dec)) return dec } catch (e) {}
+    try {
+      const fixed = s.replace(/-/g, "+").replace(/_/g, "/")
+      const dec = Buffer.from(fixed, "base64").toString("utf-8")
+      if (this.isPrintable(dec)) return dec
+    } catch (e) {}
     return null
   }
   static base32(s) {
@@ -264,7 +251,7 @@ class Decoders {
         if (i < 0) return null
         bits += i.toString(2).padStart(5, "0")
       }
-      let out = []
+      const out = []
       for (let i = 0; i + 8 <= bits.length; i += 8) out.push(parseInt(bits.substr(i, 8), 2))
       const dec = Buffer.from(out).toString("utf-8")
       if (this.isPrintable(dec)) return dec
@@ -294,7 +281,8 @@ class Decoders {
     if (s.length < 8) return null
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~\""
     try {
-      let b = 0, n = 0, out = []
+      let b = 0, n = 0
+      const out = []
       for (const c of s) {
         const i = alphabet.indexOf(c)
         if (i < 0) return null
@@ -310,18 +298,29 @@ class Decoders {
   static hex(s) {
     if (s.length < 8 || s.length % 2 !== 0) return null
     if (!/^[0-9a-fA-F]+$/.test(s)) return null
-    try { let r = ""; for (let i = 0; i < s.length; i += 2) r += String.fromCharCode(parseInt(s.substr(i, 2), 16)); if (this.isPrintable(r)) return r } catch (e) {}
+    try {
+      let r = ""
+      for (let i = 0; i < s.length; i += 2) r += String.fromCharCode(parseInt(s.substr(i, 2), 16))
+      if (this.isPrintable(r)) return r
+    } catch (e) {}
     return null
   }
   static octal(s) {
     if (s.length < 9 || s.length % 3 !== 0) return null
     if (!/^[0-7]+$/.test(s)) return null
-    try { let r = ""; for (let i = 0; i < s.length; i += 3) r += String.fromCharCode(parseInt(s.substr(i, 3), 8)); if (this.isPrintable(r)) return r } catch (e) {}
+    try {
+      let r = ""
+      for (let i = 0; i < s.length; i += 3) r += String.fromCharCode(parseInt(s.substr(i, 3), 8))
+      if (this.isPrintable(r)) return r
+    } catch (e) {}
     return null
   }
   static urlDecode(s) {
     if (!s.includes("%")) return null
-    try { const dec = decodeURIComponent(s); if (dec !== s && this.isPrintable(dec)) return dec } catch (e) {}
+    try {
+      const dec = decodeURIComponent(s)
+      if (dec !== s && this.isPrintable(dec)) return dec
+    } catch (e) {}
     return null
   }
   static ascii85(s) {
@@ -359,9 +358,7 @@ class Decoders {
     for (let key = 1; key < 256; key++) {
       let out = ""
       for (let i = 0; i < s.length && i < 500; i++) out += String.fromCharCode(s.charCodeAt(i) ^ key)
-      if (this.isPrintable(out) && this.hasLuaKeywords(out)) {
-        results.push({ key: "0x" + key.toString(16), sample: out.slice(0, 150), confidence: this.scoreText(out) })
-      }
+      if (this.isPrintable(out) && this.hasLuaKeywords(out)) results.push({ key: "0x" + key.toString(16), sample: out.slice(0, 150), confidence: this.scoreText(out) })
     }
     return results.sort((a, b) => b.confidence - a.confidence).slice(0, 3)
   }
@@ -390,12 +387,13 @@ class Decoders {
 }
 
 class StringTableAnalyzer {
-  constructor(code) { this.code = code; this.tables = []; this.totalStrings = 0 }
+  constructor(code) {
+    this.code = code
+    this.tables = []
+    this.totalStrings = 0
+  }
   findTables() {
-    const patterns = [
-      /local\s+(\w+)\s*=\s*\{([\s\S]*?)\}/g,
-      /(\w+)\s*=\s*\{([\s\S]*?)\}/g,
-    ]
+    const patterns = [/local\s+(\w+)\s*=\s*\{([\s\S]*?)\}/g, /(\w+)\s*=\s*\{([\s\S]*?)\}/g]
     for (const re of patterns) {
       let m
       while ((m = re.exec(this.code)) !== null) {
@@ -409,7 +407,12 @@ class StringTableAnalyzer {
       }
     }
     const seen = new Set()
-    this.tables = this.tables.filter(t => { const key = t.name + "_" + t.strings.length; if (seen.has(key)) return false; seen.add(key); return true })
+    this.tables = this.tables.filter(t => {
+      const key = t.name + "_" + t.strings.length
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
     return this.tables
   }
   extractStrings(body) {
@@ -420,37 +423,49 @@ class StringTableAnalyzer {
     return out
   }
   unescape(s) {
-    return s.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r").replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\\\/g, "\\").replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/\\(\d{1,3})/g, (_, d) => String.fromCharCode(parseInt(d, 10)))
+    return s
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\r/g, "\r")
+      .replace(/\\"/g, '"')
+      .replace(/\\'/g, "'")
+      .replace(/\\\\/g, "\\")
+      .replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
+      .replace(/\\(\d{1,3})/g, (_, d) => String.fromCharCode(parseInt(d, 10)))
   }
 }
 
 class Detector {
-  constructor(code) { this.code = code }
+  constructor(code) {
+    this.code = code
+  }
+  static SIGNATURES = [
+    { name: "WeAreDevs", patterns: [/wearedevs\.net\/obfuscator/i, /\[\[ v1\.0\.0 https:\/\/wearedevs/i], weight: 40, confidence: 95 },
+    { name: "Luraph v15", patterns: [/Luraph Obfuscator v15/i, /lura\.ph.*v15/i], weight: 40, confidence: 90 },
+    { name: "Luraph v14", patterns: [/Luraph Obfuscator v14/i], weight: 40, confidence: 90 },
+    { name: "Luraph v13", patterns: [/Luraph Obfuscator v13/i], weight: 35, confidence: 85 },
+    { name: "Luraph", patterns: [/luraph/i, /lura\.ph/, /return setmetatable\(\{\[80\]=unpack/i], weight: 20, confidence: 70 },
+    { name: "Moonsec V3", patterns: [/MoonSec V3/i, /MoonSec_StringsHiddenAttr/, /This file was protected with MoonSec V3/], weight: 40, confidence: 95 },
+    { name: "Moonsec V2", patterns: [/MoonSec V2/i], weight: 30, confidence: 85 },
+    { name: "IronBrew 2", patterns: [/ironbrew/i, /newproxy,setmetatable,getmetatable,select/i], weight: 25, confidence: 75 },
+    { name: "IronBrew 1", patterns: [/ib1_/i, /IronBrew1/i], weight: 25, confidence: 70 },
+    { name: "Prometheus", patterns: [/prometheus/i, /newproxy, setmetatable, getmetatable, select,/], weight: 25, confidence: 75 },
+    { name: "Luarmor", patterns: [/luarmor\.net/i, /luraph_runtime1/, /GetTutorialState\("nil nil/i, /ce_like_loadstring_fn/], weight: 40, confidence: 95 },
+    { name: "luaobfuscator", patterns: [/luaobfuscator/i, /v0=string\.char;local v1=string\.byte/], weight: 30, confidence: 85 },
+    { name: "Boronide", patterns: [/boronide/i], weight: 25, confidence: 75 },
+    { name: "Hercules", patterns: [/hercules/i], weight: 25, confidence: 75 },
+    { name: "AztupBrew", patterns: [/AztupBrew/i], weight: 25, confidence: 75 },
+    { name: "Xen", patterns: [/Xen.*obf/i], weight: 20, confidence: 65 },
+    { name: "Krnl", patterns: [/krnl.*obf/i], weight: 20, confidence: 65 },
+    { name: "Veil", patterns: [/veil.*obf/i], weight: 20, confidence: 65 },
+  ]
   detect() {
     const c = this.code
-    const checks = [
-      { name: "WeAreDevs", patterns: [/wearedevs\.net\/obfuscator/i, /\[\[ v1\.0\.0 https:\/\/wearedevs/i, /ALPHA85/], weight: 40, confidence: 95 },
-      { name: "Luraph v15", patterns: [/This file was protected using Luraph Obfuscator v15/i, /lura\.ph.*v15/i], weight: 40, confidence: 90 },
-      { name: "Luraph v14", patterns: [/This file was protected using Luraph Obfuscator v14/i], weight: 40, confidence: 90 },
-      { name: "Luraph v13", patterns: [/Luraph Obfuscator v13/i], weight: 35, confidence: 85 },
-      { name: "Luraph", patterns: [/luraph/i, /lura\.ph/, /return setmetatable\(\{\[80\]=unpack/i], weight: 20, confidence: 70 },
-      { name: "Moonsec V3", patterns: [/MoonSec V3/i, /MoonSec_StringsHiddenAttr/, /This file was protected with MoonSec V3/], weight: 40, confidence: 95 },
-      { name: "Moonsec V2", patterns: [/MoonSec V2/i], weight: 30, confidence: 85 },
-      { name: "IronBrew 2", patterns: [/ironbrew/i, /newproxy,setmetatable,getmetatable,select/i], weight: 25, confidence: 75 },
-      { name: "IronBrew 1", patterns: [/ib1_/i, /IronBrew1/i], weight: 25, confidence: 70 },
-      { name: "Prometheus", patterns: [/prometheus/i, /newproxy, setmetatable, getmetatable, select,/], weight: 25, confidence: 75 },
-      { name: "Luarmor", patterns: [/luarmor\.net/i, /luraph_runtime1/, /GetTutorialState\("nil  nil/i, /ce_like_loadstring_fn/], weight: 40, confidence: 95 },
-      { name: "luaobfuscator", patterns: [/luaobfuscator/i, /v0=string\.char;local v1=string\.byte/], weight: 30, confidence: 85 },
-      { name: "Boronide", patterns: [/boronide/i], weight: 25, confidence: 75 },
-      { name: "Hercules", patterns: [/hercules/i], weight: 25, confidence: 75 },
-      { name: "AztupBrew", patterns: [/AztupBrew/i], weight: 25, confidence: 75 },
-      { name: "Xen", patterns: [/Xen.*obf/i], weight: 20, confidence: 65 },
-      { name: "Krnl", patterns: [/krnl.*obf/i], weight: 20, confidence: 65 },
-      { name: "Veil", patterns: [/veil.*obf/i], weight: 20, confidence: 65 },
-    ]
     const matches = []
-    for (const { name, patterns, weight, confidence } of checks) {
-      for (const re of patterns) if (re.test(c)) matches.push({ name, weight, confidence, pattern: re.toString().slice(0, 60) })
+    for (const { name, patterns, weight, confidence } of Detector.SIGNATURES) {
+      for (const re of patterns) {
+        if (re.test(c)) matches.push({ name, weight, confidence, pattern: re.toString().slice(0, 60) })
+      }
     }
     matches.sort((a, b) => b.weight - a.weight)
     const best = matches[0]
@@ -471,6 +486,40 @@ class Detector {
       generic: genericSignals,
     }
   }
+  static detectStatic(code) {
+    return new Detector(code).detect()
+  }
+  analyzeLayers(code, maxDepth = 8) {
+    const layers = []
+    let current = code
+    let depth = 0
+    while (depth < maxDepth) {
+      const detected = Detector.detectStatic(current)
+      if (detected.name === "Clean" && detected.generic.length === 0) break
+      layers.push({
+        depth: depth + 1,
+        name: detected.name,
+        confidence: detected.confidence,
+        lines: current.split("\n").length,
+        size: current.length,
+        signals: detected.signals,
+        generic: detected.generic,
+      })
+      const probe = new Deobfuscator(current, { beautify: false, maxRecursive: 1 })
+      probe.code = current
+      probe.stripComments()
+      probe.decodeEscapes()
+      probe.decodeUnicode()
+      probe.decodeBase64Layer()
+      probe.decodeHexLayer()
+      probe.decodeAscii85Layer()
+      probe.decodeStringChar()
+      if (probe.code === current || probe.code.length < 50) break
+      current = probe.code
+      depth++
+    }
+    return { layers, final: current }
+  }
 }
 
 class Deobfuscator {
@@ -478,15 +527,36 @@ class Deobfuscator {
     this.original = code
     this.code = code
     this.opts = opts
+    this.maxRecursive = opts.maxRecursive || 8
     this.stats = {
-      originalSize: code.length, finalSize: 0,
-      escapesDecoded: 0, base64Decoded: 0, base32Decoded: 0, base58Decoded: 0, base91Decoded: 0,
-      hexDecoded: 0, octalDecoded: 0, urlDecoded: 0,
-      wearedevsDecoded: 0, ascii85Decoded: 0, xorDecoded: 0,
-      customB64Alphabets: 0, customB64Decoded: 0,
-      stringsFound: 0, stringRefsResolved: 0, tablesFound: 0, mathSimplified: 0,
-      antiDebugRemoved: 0, recursivePasses: 0, entropy: 0,
-      extractedAlphabet: false, alphabetPasses: 0,
+      originalSize: code.length,
+      finalSize: 0,
+      originalLines: code.split("\n").length,
+      finalLines: 0,
+      escapesDecoded: 0,
+      base64Decoded: 0,
+      base32Decoded: 0,
+      base58Decoded: 0,
+      base91Decoded: 0,
+      hexDecoded: 0,
+      octalDecoded: 0,
+      urlDecoded: 0,
+      wearedevsDecoded: 0,
+      ascii85Decoded: 0,
+      xorDecoded: 0,
+      customB64Alphabets: 0,
+      customB64Decoded: 0,
+      stringsFound: 0,
+      stringRefsResolved: 0,
+      tablesFound: 0,
+      mathSimplified: 0,
+      antiDebugRemoved: 0,
+      recursivePasses: 0,
+      entropy: 0,
+      extractedAlphabet: false,
+      alphabetPasses: 0,
+      isNested: false,
+      layerCount: 0,
     }
     this.stringTableAnalyzer = new StringTableAnalyzer(code)
     this.detector = new Detector(code)
@@ -499,13 +569,17 @@ class Deobfuscator {
     this.xorResults = []
     this.alphabet = null
     this.customB64Results = []
+    this.layers = []
+    this.detection = null
   }
-
   async run() {
     this.log.push("started")
     this.detection = this.detector.detect()
     this.log.push(`type: ${this.detection.name} (${this.detection.confidence}%)`)
-
+    const layerAnalysis = this.detector.analyzeLayers(this.original)
+    this.layers = layerAnalysis.layers
+    this.stats.isNested = this.layers.length > 1
+    this.stats.layerCount = this.layers.length
     if (this.detection.name === "WeAreDevs") {
       this.log.push("WeAreDevs - extracting alphabet")
       const extracted = Base85.extractAlphabet(this.code)
@@ -534,7 +608,6 @@ class Deobfuscator {
         this.wearedevsSamples.push(...samples.slice(0, 20))
       }
     }
-
     this.stripComments()
     this.decodeEscapes()
     this.decodeUnicode()
@@ -548,9 +621,7 @@ class Deobfuscator {
     this.decodeAscii85Layer()
     this.decodeStringChar()
     this.simplifyMath()
-
     this.decodeCustomBase64()
-
     this.stringTableAnalyzer.code = this.code
     this.stringTableAnalyzer.findTables()
     this.stats.tablesFound = this.stringTableAnalyzer.tables.length
@@ -565,96 +636,171 @@ class Deobfuscator {
     this.tryRecursiveDecode()
     if (this.opts.beautify !== false) this.beautify()
     this.stats.finalSize = this.code.length
+    this.stats.finalLines = this.code.split("\n").length
     this.log.push(`done: ${this.code.length} bytes`)
   }
-
   stripComments() {
     this.code = this.code
       .replace(/--\[=*\[[\s\S]*?\]=*\]/g, "")
       .replace(/--\[\[[\s\S]*?\]\]/g, "")
       .replace(/--[^\n\r]*/g, "")
   }
-
   decodeEscapes() {
     const before = this.stats.escapesDecoded
-    this.code = this.code.replace(/\\x([0-9a-fA-F]{2})/g, (m, h) => { const c = parseInt(h, 16); if (c >= 32 && c <= 126) { this.stats.escapesDecoded++; return String.fromCharCode(c) } return m })
-    this.code = this.code.replace(/\\(\d{1,3})/g, (m, d) => { const c = parseInt(d, 10); if (c >= 32 && c <= 126) { this.stats.escapesDecoded++; return String.fromCharCode(c) } return m })
+    this.code = this.code.replace(/\\x([0-9a-fA-F]{2})/g, (m, h) => {
+      const c = parseInt(h, 16)
+      if (c >= 32 && c <= 126) {
+        this.stats.escapesDecoded++
+        return String.fromCharCode(c)
+      }
+      return m
+    })
+    this.code = this.code.replace(/\\(\d{1,3})/g, (m, d) => {
+      const c = parseInt(d, 10)
+      if (c >= 32 && c <= 126) {
+        this.stats.escapesDecoded++
+        return String.fromCharCode(c)
+      }
+      return m
+    })
     if (this.stats.escapesDecoded > before) this.log.push(`escapes: ${this.stats.escapesDecoded - before}`)
   }
-
   decodeUnicode() {
-    this.code = this.code.replace(/\\u([0-9a-fA-F]{4})/g, (m, h) => { const c = parseInt(h, 16); if (c >= 32 && c <= 65535) { this.stats.escapesDecoded++; return String.fromCharCode(c) } return m })
+    this.code = this.code.replace(/\\u([0-9a-fA-F]{4})/g, (m, h) => {
+      const c = parseInt(h, 16)
+      if (c >= 32 && c <= 65535) {
+        this.stats.escapesDecoded++
+        return String.fromCharCode(c)
+      }
+      return m
+    })
   }
-
   decodeBase64Layer() {
     const before = this.stats.base64Decoded
-    this.code = this.code.replace(/["']([A-Za-z0-9+/]{20,}={0,2})["']/g, (m, b64) => { const dec = Decoders.base64(b64); if (dec) { this.stats.base64Decoded++; return JSON.stringify(dec) } return m })
-    this.code = this.code.replace(/["']([A-Za-z0-9_-]{20,}={0,2})["']/g, (m, b64) => { const dec = Decoders.base64url(b64); if (dec && dec.length > 4) { this.stats.base64Decoded++; return JSON.stringify(dec) } return m })
+    this.code = this.code.replace(/["']([A-Za-z0-9+/]{20,}={0,2})["']/g, (m, b64) => {
+      const dec = Decoders.base64(b64)
+      if (dec) {
+        this.stats.base64Decoded++
+        return JSON.stringify(dec)
+      }
+      return m
+    })
+    this.code = this.code.replace(/["']([A-Za-z0-9_-]{20,}={0,2})["']/g, (m, b64) => {
+      const dec = Decoders.base64url(b64)
+      if (dec && dec.length > 4) {
+        this.stats.base64Decoded++
+        return JSON.stringify(dec)
+      }
+      return m
+    })
     if (this.stats.base64Decoded > before) this.log.push(`base64: ${this.stats.base64Decoded - before}`)
   }
-
   decodeBase32Layer() {
     const before = this.stats.base32Decoded
-    this.code = this.code.replace(/["']([A-Z2-7]{16,}=*)["']/g, (m, b32) => { const dec = Decoders.base32(b32); if (dec) { this.stats.base32Decoded++; return JSON.stringify(dec) } return m })
+    this.code = this.code.replace(/["']([A-Z2-7]{16,}=*)["']/g, (m, b32) => {
+      const dec = Decoders.base32(b32)
+      if (dec) {
+        this.stats.base32Decoded++
+        return JSON.stringify(dec)
+      }
+      return m
+    })
     if (this.stats.base32Decoded > before) this.log.push(`base32: ${this.stats.base32Decoded - before}`)
   }
-
   decodeBase58Layer() {
     const before = this.stats.base58Decoded
-    this.code = this.code.replace(/["']([1-9A-HJ-NP-Za-km-z]{20,})["']/g, (m, b58) => { const dec = Decoders.base58(b58); if (dec) { this.stats.base58Decoded++; return JSON.stringify(dec) } return m })
+    this.code = this.code.replace(/["']([1-9A-HJ-NP-Za-km-z]{20,})["']/g, (m, b58) => {
+      const dec = Decoders.base58(b58)
+      if (dec) {
+        this.stats.base58Decoded++
+        return JSON.stringify(dec)
+      }
+      return m
+    })
     if (this.stats.base58Decoded > before) this.log.push(`base58: ${this.stats.base58Decoded - before}`)
   }
-
   decodeBase91Layer() {
     const before = this.stats.base91Decoded
     this.code = this.code.replace(/["']([A-Za-z0-9!#$%&()*+,.\/:;<=>?@\[\]^_`{|}~"]{20,})["']/g, (m, b91) => {
       if (/[а-яА-Я\u0600-\u06FF]/.test(b91)) return m
       const dec = Decoders.base91(b91)
-      if (dec && dec.length > 3) { this.stats.base91Decoded++; return JSON.stringify(dec) }
+      if (dec && dec.length > 3) {
+        this.stats.base91Decoded++
+        return JSON.stringify(dec)
+      }
       return m
     })
     if (this.stats.base91Decoded > before) this.log.push(`base91: ${this.stats.base91Decoded - before}`)
   }
-
   decodeHexLayer() {
     const before = this.stats.hexDecoded
-    this.code = this.code.replace(/["']([0-9a-fA-F]{12,})["']/g, (m, h) => { const dec = Decoders.hex(h); if (dec) { this.stats.hexDecoded++; return JSON.stringify(dec) } return m })
+    this.code = this.code.replace(/["']([0-9a-fA-F]{12,})["']/g, (m, h) => {
+      const dec = Decoders.hex(h)
+      if (dec) {
+        this.stats.hexDecoded++
+        return JSON.stringify(dec)
+      }
+      return m
+    })
     if (this.stats.hexDecoded > before) this.log.push(`hex: ${this.stats.hexDecoded - before}`)
   }
-
   decodeOctalLayer() {
     const before = this.stats.octalDecoded
-    this.code = this.code.replace(/"(\d{9,})"/g, (m, o) => { const dec = Decoders.octal(o); if (dec) { this.stats.octalDecoded++; return JSON.stringify(dec) } return m })
+    this.code = this.code.replace(/"(\d{9,})"/g, (m, o) => {
+      const dec = Decoders.octal(o)
+      if (dec) {
+        this.stats.octalDecoded++
+        return JSON.stringify(dec)
+      }
+      return m
+    })
     if (this.stats.octalDecoded > before) this.log.push(`octal: ${this.stats.octalDecoded - before}`)
   }
-
   decodeURLLayer() {
     const before = this.stats.urlDecoded
-    this.code = this.code.replace(/["']([^"']*%[0-9a-fA-F]{2}[^"']*)["']/g, (m, s) => { const dec = Decoders.urlDecode(s); if (dec) { this.stats.urlDecoded++; return JSON.stringify(dec) } return m })
+    this.code = this.code.replace(/["']([^"']*%[0-9a-fA-F]{2}[^"']*)["']/g, (m, s) => {
+      const dec = Decoders.urlDecode(s)
+      if (dec) {
+        this.stats.urlDecoded++
+        return JSON.stringify(dec)
+      }
+      return m
+    })
     if (this.stats.urlDecoded > before) this.log.push(`url: ${this.stats.urlDecoded - before}`)
   }
-
   decodeAscii85Layer() {
     const before = this.stats.ascii85Decoded
     this.code = this.code.replace(/["']([!-u~]{20,})["']/g, (m, s) => {
       if (s.startsWith("^") || s.startsWith("j")) return m
       const dec = Decoders.ascii85(s)
-      if (dec) { this.stats.ascii85Decoded++; return JSON.stringify(dec) }
+      if (dec) {
+        this.stats.ascii85Decoded++
+        return JSON.stringify(dec)
+      }
       return m
     })
     if (this.stats.ascii85Decoded > before) this.log.push(`ascii85: ${this.stats.ascii85Decoded - before}`)
   }
-
   decodeStringChar() {
     this.code = this.code.replace(/string\.char\s*\(\s*([0-9,\s+*%\-()xXa-fA-F]+)\s*\)/g, (m, args) => {
       try {
-        const nums = args.split(/[,\s]+/).map(x => { try { return eval(x) } catch { return NaN } }).filter(n => !isNaN(n) && n >= 0 && n <= 255)
-        if (nums.length > 0) { const str = String.fromCharCode(...nums); if (/^[\x20-\x7E\s]*$/.test(str)) { this.stats.escapesDecoded++; return JSON.stringify(str) } }
+        const nums = args
+          .split(/[,\s]+/)
+          .map(x => {
+            try { return eval(x) } catch { return NaN }
+          })
+          .filter(n => !isNaN(n) && n >= 0 && n <= 255)
+        if (nums.length > 0) {
+          const str = String.fromCharCode(...nums)
+          if (/^[\x20-\x7E\s]*$/.test(str)) {
+            this.stats.escapesDecoded++
+            return JSON.stringify(str)
+          }
+        }
       } catch (e) {}
       return m
     })
   }
-
   decodeCustomBase64() {
     const alphabets = CustomBase64.extractAlphabets(this.code)
     if (alphabets.length === 0) return
@@ -683,7 +829,6 @@ class Deobfuscator {
     }
     if (this.stats.customB64Decoded > 0) this.log.push(`custom b64 decoded: ${this.stats.customB64Decoded} strings`)
   }
-
   simplifyMath() {
     const ops = [
       { re: /bit32\.bxor\s*\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/g, fn: (a, b) => a ^ b },
@@ -704,7 +849,11 @@ class Deobfuscator {
         this.code = this.code.replace(re, (m, a, b) => {
           try {
             const r = fn(parseInt(a), b !== undefined ? parseInt(b) : undefined)
-            if (!isNaN(r) && Number.isFinite(r)) { this.stats.mathSimplified++; changed = true; return String(r) }
+            if (!isNaN(r) && Number.isFinite(r)) {
+              this.stats.mathSimplified++
+              changed = true
+              return String(r)
+            }
           } catch (e) {}
           return m
         })
@@ -713,19 +862,20 @@ class Deobfuscator {
     }
     if (this.stats.mathSimplified > 0) this.log.push(`math: ${this.stats.mathSimplified}`)
   }
-
   resolveStringRefs() {
     for (const table of this.stringTableAnalyzer.tables) {
       const re = new RegExp(`${table.name}\\s*\\[\\s*(\\d+)\\s*\\]`, "g")
       this.code = this.code.replace(re, (m, idx) => {
         const i = parseInt(idx) - 1
-        if (i >= 0 && i < table.strings.length) { this.stats.stringRefsResolved++; return JSON.stringify(table.strings[i]) }
+        if (i >= 0 && i < table.strings.length) {
+          this.stats.stringRefsResolved++
+          return JSON.stringify(table.strings[i])
+        }
         return m
       })
     }
     if (this.stats.stringRefsResolved > 0) this.log.push(`refs: ${this.stats.stringRefsResolved}`)
   }
-
   removeAntiDebug() {
     const before = this.code.length
     this.code = this.code
@@ -737,7 +887,6 @@ class Deobfuscator {
       .replace(/debug\.setupvalue\s*\([^)]*\)/g, "nil")
     this.stats.antiDebugRemoved = Math.floor((before - this.code.length) / 20)
   }
-
   tryXorBrute() {
     const suspiciousStrings = this.code.match(/["']([A-Za-z0-9+/=]{16,})["']/g) || []
     for (const str of suspiciousStrings.slice(0, 5)) {
@@ -750,18 +899,15 @@ class Deobfuscator {
     }
     if (this.stats.xorDecoded > 0) this.log.push(`xor candidates: ${this.stats.xorDecoded}`)
   }
-
   extractUrls() {
     const m = this.code.match(/https?:\/\/[^\s"'`\)]+/g) || []
     this.urls = [...new Set(m)].filter(u => u.length > 10 && u.length < 250).slice(0, 30)
   }
-
   extractWebhooks() {
     const m = this.code.match(/discord(?:app)?\.com\/api\/webhooks\/[^\s"'`]+/g) || []
     this.webhooks = [...new Set(m)].slice(0, 15)
     if (this.webhooks.length > 0) this.warnings.push(`${this.webhooks.length} webhook(s)`)
   }
-
   extractKeys() {
     const patterns = [
       /key\s*[=:]\s*["']([A-Za-z0-9_\-]{16,})["']/gi,
@@ -775,20 +921,21 @@ class Deobfuscator {
     this.keys = [...new Set(this.keys)].slice(0, 15)
     if (this.keys.length > 0) this.warnings.push(`${this.keys.length} possible key(s)`)
   }
-
   calculateEntropy() {
     const freq = {}
     for (const c of this.code) freq[c] = (freq[c] || 0) + 1
     let e = 0
     const len = this.code.length
-    for (const c of Object.values(freq)) { const p = c / len; e -= p * Math.log2(p) }
+    for (const c of Object.values(freq)) {
+      const p = c / len
+      e -= p * Math.log2(p)
+    }
     this.stats.entropy = parseFloat((e / 8).toFixed(3))
     if (e / 8 > 0.7) this.warnings.push(`High entropy (${this.stats.entropy})`)
   }
-
   tryRecursiveDecode() {
     let passes = 0
-    while (passes < 8) {
+    while (passes < this.maxRecursive) {
       const before = this.code
       this.decodeBase64Layer()
       this.decodeBase32Layer()
@@ -804,210 +951,427 @@ class Deobfuscator {
       passes++
     }
     this.stats.recursivePasses = passes
-    if (passes > 0) this.log.push(`${passes} extra layers`)
   }
-
   beautify() {
-    const lines = this.code.split(/[;\n]/).filter(l => l.trim())
+    const lines = this.code.split(/\n/).map(l => l.trim()).filter(l => l.length > 0)
     let indent = 0
-    const result = []
-    for (let line of lines) {
-      const t = line.trim()
-      if (!t) continue
-      if (/^(end|else|elseif|until|\}|\))/.test(t)) indent = Math.max(0, indent - 1)
-      result.push("  ".repeat(indent) + t)
-      if (/(then|do|function|repeat|else|elseif|\{|\()$/.test(t) && !/^(else|elseif)/.test(t)) indent++
+    const out = []
+    for (const line of lines) {
+      if (/^(end|else|elseif|until|\)|\})/i.test(line)) indent = Math.max(0, indent - 1)
+      out.push("  ".repeat(indent) + line)
+      if (/(then|do|function|repeat|else|elseif|\{|\()$/i.test(line) && !/^(else|elseif)/i.test(line)) indent++
     }
-    this.code = result.join("\n")
-  }
-
-  buildReport(time, source) {
-    const alphabetBlock = this.alphabet ? this.alphabet.join("") : "Not extracted"
-    const xorBlock = this.xorResults.length > 0
-      ? this.xorResults.map(x => `Input: "${x.input}..."\n` + x.results.map(r => `  Key ${r.key} -> "${r.sample}"`).join("\n")).join("\n\n")
-      : "None"
-    const waBlock = this.wearedevsSamples.length > 0
-      ? this.wearedevsSamples.map(s => `"${s.raw.slice(0, 40)}" -> "${s.decoded.slice(0, 60)}"`).join("\n")
-      : "None"
-    const customB64Block = this.customB64Results.length > 0
-      ? this.customB64Results.map(r => 
-          `Table: ${r.tableName} (alphabet: ${r.alphabetName})\n` +
-          r.strings.slice(0, 25).map(s => 
-            `  [${s.type}] "${s.raw.slice(0, 40)}" -> "${s.decoded.slice(0, 80)}"`
-          ).join("\n")
-        ).join("\n\n")
-      : "None"
-    return [
-      "DEOBFUSCATION REPORT", "====================",
-      `Source: ${source}`, `Time: ${time}ms`, "",
-      "DETECTION", `Type: ${this.detection.name}`, `Confidence: ${this.detection.confidence}%`,
-      `Signals: ${this.detection.signals.join(", ") || "None"}`,
-      `Generic: ${this.detection.generic.join(", ") || "None"}`, "",
-      "EXTRACTED ALPHABET", alphabetBlock, "",
-      "STATISTICS",
-      `Original: ${this.stats.originalSize} bytes`, `Final: ${this.stats.finalSize} bytes`,
-      `Escapes: ${this.stats.escapesDecoded}`, `Base64: ${this.stats.base64Decoded}`,
-      `Base32: ${this.stats.base32Decoded}`, `Base58: ${this.stats.base58Decoded}`,
-      `Base91: ${this.stats.base91Decoded}`, `Hex: ${this.stats.hexDecoded}`,
-      `Octal: ${this.stats.octalDecoded}`, `URL: ${this.stats.urlDecoded}`,
-      `Ascii85: ${this.stats.ascii85Decoded}`, `WeAreDevs: ${this.stats.wearedevsDecoded}`,
-      `CustomB64 Alphabets: ${this.stats.customB64Alphabets}`,
-      `CustomB64 Decoded: ${this.stats.customB64Decoded}`,
-      `Alphabet passes: ${this.stats.alphabetPasses}`, `XOR: ${this.stats.xorDecoded}`,
-      `Strings: ${this.stats.stringsFound}`, `Refs: ${this.stats.stringRefsResolved}`,
-      `Tables: ${this.stats.tablesFound}`, `Math: ${this.stats.mathSimplified}`,
-      `Anti-debug: ${this.stats.antiDebugRemoved}`, `Layers: ${this.stats.recursivePasses}`,
-      `Entropy: ${this.stats.entropy}`, "",
-      "WEAREDEVS SAMPLES", waBlock,
-      "", "CUSTOM BASE64 RESULTS", customB64Block,
-      "", "XOR BRUTE RESULTS", xorBlock,
-      "", "URLS", this.urls.join("\n") || "None",
-      "", "WEBHOOKS", this.webhooks.join("\n") || "None",
-      "", "KEYS", this.keys.join("\n") || "None",
-      "", "WARNINGS", this.warnings.join("\n") || "None",
-      "", "====================", "DEOBFUSCATED CODE", "====================",
-      "", this.code,
-    ].join("\n")
+    this.code = out.join("\n")
   }
 }
 
-class Logger {
-  constructor() { this.start = Date.now() }
-  log(level, msg, data = {}) {
-    const colors = { INFO: "\x1b[36m", WARN: "\x1b[33m", ERROR: "\x1b[31m", SUCCESS: "\x1b[32m", DEBUG: "\x1b[35m" }
-    console.log(`${colors[level] || ""}[${level}] ${msg}\x1b[0m`, Object.keys(data).length ? data : "")
-  }
+async function fetchCodeFromUrl(url) {
+  const fixed = url
+    .replace(/github\.com\/([^\/]+)\/([^\/]+)\/blob\//, "raw.githubusercontent.com/$1/$2/")
+    .replace(/pastebin\.com\/(?!raw\/)([A-Za-z0-9]+)/, "pastebin.com/raw/$1")
+  const response = await fetch(fixed, { headers: { "User-Agent": "Mozilla/5.0" } })
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  return await response.text()
 }
 
-const logger = new Logger()
+async function readAttachment(attachment) {
+  if (attachment.size > 5 * 1024 * 1024) throw new Error("File too large (max 5MB)")
+  const valid = [".lua", ".txt", ".luau", ".luac"]
+  if (!valid.some(e => attachment.name.toLowerCase().endsWith(e))) throw new Error("Invalid file type")
+  const response = await fetch(attachment.url)
+  if (!response.ok) throw new Error(`Download failed: ${response.statusText}`)
+  return await response.text()
+}
+
+function buildReport(result) {
+  let r = "═══════════════════════════════════════════════\n"
+  r += "           DEOBFUSCATION REPORT (V6)\n"
+  r += "═══════════════════════════════════════════════\n\n"
+  r += "🎯 DETECTION\n"
+  r += `   Type: ${result.detection.name}\n`
+  r += `   Confidence: ${result.detection.confidence}%\n`
+  r += `   Nested: ${result.stats.isNested ? "YES (" + result.stats.layerCount + " layers)" : "NO"}\n`
+  if (result.detection.signals.length > 0) {
+    r += `   Signals: ${result.detection.signals.slice(0, 5).join(", ")}\n`
+  }
+  if (result.detection.generic.length > 0) {
+    r += `   Generic: ${result.detection.generic.join(", ")}\n`
+  }
+  r += "\n"
+  if (result.layers.length > 0) {
+    r += "🧅 LAYER ANALYSIS (ONION)\n"
+    for (const layer of result.layers) {
+      r += `   Layer ${layer.depth}: ${layer.name} (${layer.confidence}%) - ${layer.lines} lines, ${layer.size} bytes\n`
+      if (layer.signals.length > 0) r += `      signals: ${layer.signals.slice(0, 3).join(", ")}\n`
+    }
+    r += "\n"
+  }
+  r += "📊 STATISTICS\n"
+  r += `   Original: ${result.stats.originalSize} bytes (${result.stats.originalLines} lines)\n`
+  r += `   Final:    ${result.stats.finalSize} bytes (${result.stats.finalLines} lines)\n`
+  const ratio = ((1 - result.stats.finalSize / result.stats.originalSize) * 100).toFixed(1)
+  r += `   Reduced:  ${ratio}%\n`
+  r += `   Entropy:  ${result.stats.entropy}\n`
+  r += "\n"
+  r += "🔓 DECODING RESULTS\n"
+  if (result.stats.wearedevsDecoded > 0) r += `   WeAreDevs:    ${result.stats.wearedevsDecoded}\n`
+  if (result.stats.base64Decoded > 0) r += `   Base64:       ${result.stats.base64Decoded}\n`
+  if (result.stats.base32Decoded > 0) r += `   Base32:       ${result.stats.base32Decoded}\n`
+  if (result.stats.base58Decoded > 0) r += `   Base58:       ${result.stats.base58Decoded}\n`
+  if (result.stats.base91Decoded > 0) r += `   Base91:       ${result.stats.base91Decoded}\n`
+  if (result.stats.hexDecoded > 0) r += `   Hex:          ${result.stats.hexDecoded}\n`
+  if (result.stats.octalDecoded > 0) r += `   Octal:        ${result.stats.octalDecoded}\n`
+  if (result.stats.urlDecoded > 0) r += `   URL:          ${result.stats.urlDecoded}\n`
+  if (result.stats.ascii85Decoded > 0) r += `   Ascii85:      ${result.stats.ascii85Decoded}\n`
+  if (result.stats.customB64Decoded > 0) r += `   Custom B64:   ${result.stats.customB64Decoded}\n`
+  if (result.stats.escapesDecoded > 0) r += `   Escapes:      ${result.stats.escapesDecoded}\n`
+  if (result.stats.stringRefsResolved > 0) r += `   String refs:  ${result.stats.stringRefsResolved}\n`
+  if (result.stats.mathSimplified > 0) r += `   Math ops:     ${result.stats.mathSimplified}\n`
+  if (result.stats.antiDebugRemoved > 0) r += `   Anti-debug:   ${result.stats.antiDebugRemoved}\n`
+  if (result.stats.xorDecoded > 0) r += `   XOR candidates: ${result.stats.xorDecoded}\n`
+  r += `   Recursive passes: ${result.stats.recursivePasses}\n`
+  if (result.stats.extractedAlphabet) r += `   Alphabet: EXTRACTED (85 chars, ${result.stats.alphabetPasses} passes)\n`
+  r += "\n"
+  if (result.stringTableAnalyzer && result.stringTableAnalyzer.tables.length > 0) {
+    r += "📚 STRING TABLES\n"
+    for (const t of result.stringTableAnalyzer.tables.slice(0, 10)) {
+      r += `   ${t.name}: ${t.strings.length} strings\n`
+    }
+    r += "\n"
+  }
+  if (result.wearedevsSamples.length > 0) {
+    r += "🔤 WEAREDEVS DECODED SAMPLES\n"
+    for (const s of result.wearedevsSamples.slice(0, 15)) {
+      const shown = s.decoded.length > 60 ? s.decoded.slice(0, 60) + "..." : s.decoded
+      r += `   ${JSON.stringify(shown)}\n`
+    }
+    r += "\n"
+  }
+  if (result.customB64Results.length > 0) {
+    r += "🔐 CUSTOM BASE64 RESULTS\n"
+    for (const tbl of result.customB64Results) {
+      r += `   Table: ${tbl.tableName} (alphabet: ${tbl.alphabetName})\n`
+      for (const s of tbl.strings.slice(0, 10)) {
+        const shown = s.decoded.length > 60 ? s.decoded.slice(0, 60) + "..." : s.decoded
+        r += `      [${s.type}] ${JSON.stringify(shown)}\n`
+      }
+    }
+    r += "\n"
+  }
+  if (result.xorResults.length > 0) {
+    r += "🧮 XOR BRUTE FORCE\n"
+    for (const x of result.xorResults) {
+      for (const r2 of x.results.slice(0, 2)) {
+        r += `   [${r2.key}] ${JSON.stringify(r2.sample.slice(0, 80))}\n`
+      }
+    }
+    r += "\n"
+  }
+  if (result.urls.length > 0) {
+    r += "🌐 URLS FOUND\n"
+    for (const u of result.urls.slice(0, 10)) r += `   ${u}\n`
+    r += "\n"
+  }
+  if (result.webhooks.length > 0) {
+    r += "⚠️ WEBHOOKS FOUND\n"
+    for (const w of result.webhooks) r += `   ${w}\n`
+    r += "\n"
+  }
+  if (result.keys.length > 0) {
+    r += "🔑 KEYS FOUND\n"
+    for (const k of result.keys.slice(0, 10)) r += `   ${k}\n`
+    r += "\n"
+  }
+  if (result.warnings.length > 0) {
+    r += "⚠️ WARNINGS\n"
+    for (const w of result.warnings) r += `   ${w}\n`
+    r += "\n"
+  }
+  r += "📝 PROCESSING LOG\n"
+  for (const l of result.log) r += `   > ${l}\n`
+  r += "\n"
+  r += "═══════════════════════════════════════════════\n"
+  r += "               DEOBFUSCATED CODE\n"
+  r += "═══════════════════════════════════════════════\n\n"
+  r += result.code
+  return r
+}
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds] })
 
 const commands = [
-  new SlashCommandBuilder().setName("deobf").setDescription("Deobfuscate Lua code").addStringOption(o => o.setName("code").setDescription("Obfuscated code").setRequired(true)).toJSON(),
-  new SlashCommandBuilder().setName("deobf_url").setDescription("Deobfuscate from URL").addStringOption(o => o.setName("url").setDescription("URL to Lua file").setRequired(true)).toJSON(),
-  new SlashCommandBuilder().setName("deobf_file").setDescription("Deobfuscate uploaded file").addAttachmentOption(o => o.setName("file").setDescription("Lua file").setRequired(true)).toJSON(),
-  new SlashCommandBuilder().setName("detect").setDescription("Detect obfuscator type").addStringOption(o => o.setName("code").setDescription("Code").setRequired(true)).toJSON(),
-  new SlashCommandBuilder().setName("help").setDescription("Show help").toJSON(),
-]
+  new SlashCommandBuilder()
+    .setName("deobf")
+    .setDescription("Deobfuscate Lua code from a string")
+    .addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(true))
+    .addBooleanOption(o => o.setName("beautify").setDescription("Format the output (default: true)"))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("deobf_url")
+    .setDescription("Deobfuscate Lua code from a URL")
+    .addStringOption(o => o.setName("url").setDescription("URL to the obfuscated code").setRequired(true))
+    .addBooleanOption(o => o.setName("beautify").setDescription("Format the output (default: true)"))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("deobf_file")
+    .setDescription("Deobfuscate Lua code from an uploaded file")
+    .addAttachmentOption(o => o.setName("file").setDescription("File (.lua/.txt/.luau/.luac)").setRequired(true))
+    .addBooleanOption(o => o.setName("beautify").setDescription("Format the output (default: true)"))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("detect")
+    .setDescription("Detect obfuscator type (no deobfuscation)")
+    .addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(false))
+    .addStringOption(o => o.setName("url").setDescription("Or a URL to the code").setRequired(false))
+    .addAttachmentOption(o => o.setName("file").setDescription("Or a file").setRequired(false))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("layers")
+    .setDescription("Analyze nested obfuscation layers (onion)")
+    .addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(true))
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("help")
+    .setDescription("Show available commands")
+    .toJSON(),
+].map(c => c)
 
-async function register() {
+async function registerCommands() {
+  if (!process.env.DISCORD_TOKEN || !process.env.CLIENT_ID) {
+    Logger.log("ERROR", "Missing DISCORD_TOKEN or CLIENT_ID")
+    return
+  }
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN)
   try {
+    Logger.log("INFO", "Registering slash commands...")
     await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands })
-    logger.log("SUCCESS", "Commands registered")
-  } catch (e) {
-    logger.log("ERROR", "Register failed", { error: e.message })
+    Logger.log("SUCCESS", "Slash commands registered")
+  } catch (error) {
+    Logger.log("ERROR", "Failed to register commands", { error: error.message })
   }
 }
 
-async function processAndReply(interaction, code, source) {
-  if (!code || code.length < 5) return interaction.editReply({ content: "Code too short" })
-  if (code.length > 500000) return interaction.editReply({ content: "Code too large (max 500KB)" })
-  const start = Date.now()
-  const d = new Deobfuscator(code, { math: true, strings: true, beautify: true })
-  await d.run()
-  const time = Date.now() - start
-  const embed = new EmbedBuilder()
-    .setColor(d.webhooks.length > 0 ? "#ff0000" : "#00ff88")
-    .setTitle("Deobfuscation Complete")
-    .addFields(
-      { name: "Type", value: d.detection.name, inline: true },
-      { name: "Confidence", value: `${d.detection.confidence}%`, inline: true },
-      { name: "Time", value: `${time}ms`, inline: true },
-      { name: "Size", value: `${d.stats.originalSize} -> ${d.stats.finalSize}`, inline: true },
-      { name: "WeAreDevs", value: String(d.stats.wearedevsDecoded), inline: true },
-      { name: "CustomB64", value: `${d.stats.customB64Alphabets} A / ${d.stats.customB64Decoded} S`, inline: true },
-      { name: "Base64/32/58/91", value: `${d.stats.base64Decoded}/${d.stats.base32Decoded}/${d.stats.base58Decoded}/${d.stats.base91Decoded}`, inline: true },
-      { name: "Hex/Octal", value: `${d.stats.hexDecoded}/${d.stats.octalDecoded}`, inline: true },
-      { name: "Entropy", value: String(d.stats.entropy), inline: true },
-    )
-  if (d.urls.length > 0) embed.addFields({ name: "URLs", value: d.urls.slice(0, 5).join("\n").slice(0, 1024) })
-  if (d.webhooks.length > 0) embed.addFields({ name: "Webhooks", value: d.webhooks.slice(0, 3).join("\n").slice(0, 1024) })
-  if (d.warnings.length > 0) embed.addFields({ name: "Warnings", value: d.warnings.join("\n").slice(0, 1024) })
-  const report = d.buildReport(time, source)
-  const buffer = Buffer.from(report, "utf-8")
-  const file = new AttachmentBuilder(buffer, { name: `deobf_${Date.now()}.txt` })
-  await interaction.editReply({ embeds: [embed], files: [file] })
+async function resolveCode(interaction) {
+  const codeOpt = interaction.options.getString("code")
+  const urlOpt = interaction.options.getString("url")
+  const fileOpt = interaction.options.getAttachment("file")
+  if (codeOpt) return { code: codeOpt, source: "Direct input" }
+  if (urlOpt) return { code: await fetchCodeFromUrl(urlOpt), source: `URL: ${urlOpt}` }
+  if (fileOpt) return { code: await readAttachment(fileOpt), source: `File: ${fileOpt.name}` }
+  throw new Error("Please provide code, URL, or file")
 }
 
 client.once("ready", () => {
-  logger.log("SUCCESS", `Bot online: ${client.user.tag}`)
-  register()
+  Logger.log("SUCCESS", `Bot online: ${client.user.tag}`)
+  Logger.log("INFO", `Serving ${client.guilds.cache.size} server(s)`)
+  registerCommands()
 })
 
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return
-  await interaction.deferReply()
-  try {
-    if (interaction.commandName === "help") {
-      const embed = new EmbedBuilder().setColor("#5865F2").setTitle("Deobf Bot")
-        .setDescription("Lua deobfuscator — full encodings support")
+
+  if (interaction.commandName === "help") {
+    const embed = new EmbedBuilder()
+      .setColor(0x00aaff)
+      .setTitle("📖 Deobfuscator Bot V6")
+      .setDescription("Advanced Lua deobfuscation with nested-layer detection")
+      .addFields(
+        { name: "/deobf code:<code>", value: "Deobfuscate code directly" },
+        { name: "/deobf_url url:<link>", value: "Deobfuscate from URL (Pastebin/GitHub/Gist)" },
+        { name: "/deobf_file file:<file>", value: "Deobfuscate from uploaded file" },
+        { name: "/detect", value: "Detect obfuscator type + line count + nested layers" },
+        { name: "/layers code:<code>", value: "Analyze nested obfuscation (onion)" },
+        { name: "/help", value: "Show this message" },
+        { name: "✨ Features", value: "• 25+ obfuscator detection\n• 16+ encodings decoded\n• Nested layer (onion) analysis\n• WeAreDevs ASCII85 + VM\n• Custom Base64 alphabets\n• XOR brute force\n• Webhook/key extraction" }
+      )
+      .setFooter({ text: "V6 • Advanced" })
+    await interaction.reply({ embeds: [embed] })
+    return
+  }
+
+  if (interaction.commandName === "detect") {
+    await interaction.deferReply()
+    try {
+      const codeOpt = interaction.options.getString("code")
+      const urlOpt = interaction.options.getString("url")
+      const fileOpt = interaction.options.getAttachment("file")
+      let code = null
+      let source = null
+      if (codeOpt) { code = codeOpt; source = "Direct input" }
+      else if (urlOpt) { code = await fetchCodeFromUrl(urlOpt); source = `URL: ${urlOpt}` }
+      else if (fileOpt) { code = await readAttachment(fileOpt); source = `File: ${fileOpt.name}` }
+      else throw new Error("Provide code, URL, or file")
+
+      const detector = new Detector(code)
+      const detection = detector.detect()
+      const lines = code.split("\n").length
+      const bytes = code.length
+      const layerAnalysis = detector.analyzeLayers(code)
+
+      const embed = new EmbedBuilder()
+        .setColor(detection.name === "Clean" ? 0x00ff88 : 0xffaa00)
+        .setTitle("🔍 Obfuscation Detection")
+        .setDescription(`**Source:** ${source}`)
         .addFields(
-          { name: "/deobf", value: "Deobfuscate code text" },
-          { name: "/deobf_url", value: "Deobfuscate from URL" },
-          { name: "/deobf_file", value: "Deobfuscate uploaded file" },
-          { name: "/detect", value: "Detect obfuscator type" },
-          { name: "Encodings", value: "Base64, Base32, Base58, Base85, Base91, Hex, Octal, Ascii85, URL, XOR" },
-          { name: "Custom", value: "Custom Base64 with extracted alphabet" },
-          { name: "Obfuscators", value: "WeAreDevs, Luraph, Moonsec, IronBrew, Prometheus, Luarmor, luaobfuscator, and more" },
+          { name: "🎯 Type", value: detection.name, inline: true },
+          { name: "🎚️ Confidence", value: `${detection.confidence}%`, inline: true },
+          { name: "📊 Lines", value: `${lines.toLocaleString()}`, inline: true },
+          { name: "💾 Size", value: `${bytes.toLocaleString()} bytes`, inline: true },
+          { name: "🧅 Nested Layers", value: layerAnalysis.layers.length > 1 ? `**YES** (${layerAnalysis.layers.length} layers)` : "No", inline: true },
+          { name: "🎭 Obfuscated", value: detection.name === "Clean" ? "No ✅" : "Yes 🔒", inline: true },
         )
-      return interaction.editReply({ embeds: [embed] })
+
+      if (detection.signals.length > 0) {
+        embed.addFields({ name: "🔖 Matched Signatures", value: detection.signals.slice(0, 8).map(s => `• ${s}`).join("\n").slice(0, 1000) })
+      }
+      if (detection.generic.length > 0) {
+        embed.addFields({ name: "🧩 Generic Signals", value: detection.generic.map(s => `• ${s}`).join("\n").slice(0, 1000) })
+      }
+      if (layerAnalysis.layers.length > 1) {
+        const layerText = layerAnalysis.layers.map(l => `**Layer ${l.depth}:** ${l.name} (${l.confidence}%) — ${l.lines} lines`).join("\n")
+        embed.addFields({ name: "🧅 Onion Layers", value: layerText.slice(0, 1000) })
+      }
+      embed.setTimestamp().setFooter({ text: "V6 Detection Engine" })
+
+      await interaction.editReply({ embeds: [embed] })
+    } catch (error) {
+      await interaction.editReply({ content: `❌ Error: ${error.message}` })
     }
-    if (interaction.commandName === "detect") {
+    return
+  }
+
+  if (interaction.commandName === "layers") {
+    await interaction.deferReply()
+    try {
       const code = interaction.options.getString("code")
-      if (!code || code.length < 5) return interaction.editReply({ content: "Code too short" })
-      const d = new Detector(code)
-      const r = d.detect()
-      const embed = new EmbedBuilder().setColor("#ffaa00").setTitle("Detection Result")
+      const detector = new Detector(code)
+      const analysis = detector.analyzeLayers(code)
+
+      const embed = new EmbedBuilder()
+        .setColor(0x9933ff)
+        .setTitle("🧅 Nested Layer Analysis (Onion)")
         .addFields(
-          { name: "Type", value: r.name, inline: true },
-          { name: "Confidence", value: `${r.confidence}%`, inline: true },
-          { name: "Size", value: `${code.length} chars`, inline: true },
+          { name: "🔢 Total Layers", value: `${analysis.layers.length}`, inline: true },
+          { name: "📊 Original", value: `${code.length.toLocaleString()} bytes`, inline: true },
+          { name: "📉 Final", value: `${analysis.final.length.toLocaleString()} bytes`, inline: true },
         )
-      if (r.signals.length > 0) embed.addFields({ name: "Signals", value: r.signals.join("\n").slice(0, 1024) })
-      if (r.generic.length > 0) embed.addFields({ name: "Generic", value: r.generic.join(", ") })
-      return interaction.editReply({ embeds: [embed] })
-    }
-    if (interaction.commandName === "deobf") {
-      return await processAndReply(interaction, interaction.options.getString("code"), "Direct input")
-    }
-    if (interaction.commandName === "deobf_url") {
-      const url = interaction.options.getString("url")
-      let finalUrl = url
-      if (/pastebin\.com\/[^\/]+$/i.test(url) && !url.includes("/raw/")) finalUrl = url.replace("pastebin.com/", "pastebin.com/raw/")
-      else if (/gist\.github\.com\/([^\/]+)\/([^\/]+)$/i.test(url)) finalUrl = url + "/raw"
-      else if (/github\.com\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.+)/i.test(url)) finalUrl = url.replace("/blob/", "/raw/")
-      try {
-        const res = await fetch(finalUrl)
-        const code = await res.text()
-        return await processAndReply(interaction, code, `URL: ${url}`)
-      } catch (e) {
-        return interaction.editReply({ content: `Fetch failed: ${e.message}` })
+
+      if (analysis.layers.length === 0) {
+        embed.setDescription("No obfuscation layers detected — code appears clean.")
+      } else {
+        const layerText = analysis.layers.map(l => {
+          const sigs = l.signals.length > 0 ? `\n   _${l.signals.slice(0, 2).join(", ")}_` : ""
+          return `**Layer ${l.depth}:** ${l.name} (${l.confidence}%)\n   📊 ${l.lines} lines • ${l.size.toLocaleString()} bytes${sigs}`
+        }).join("\n\n")
+        embed.setDescription(layerText.slice(0, 4000))
       }
+
+      const buffer = Buffer.from(analysis.final, "utf-8")
+      const attachment = new AttachmentBuilder(buffer, { name: "unwrapped.lua" })
+      embed.setTimestamp().setFooter({ text: "V6 Onion Engine" })
+
+      await interaction.editReply({ embeds: [embed], files: [attachment] })
+    } catch (error) {
+      await interaction.editReply({ content: `❌ Error: ${error.message}` })
     }
-    if (interaction.commandName === "deobf_file") {
-      const attachment = interaction.options.getAttachment("file")
-      if (attachment.size > 5000000) return interaction.editReply({ content: "File too large (5MB max)" })
-      const valid = [".lua", ".txt", ".luau", ".luac"]
-      if (!valid.some(ext => attachment.name.toLowerCase().endsWith(ext))) {
-        return interaction.editReply({ content: "Invalid file type (use .lua/.txt/.luau/.luac)" })
+    return
+  }
+
+  if (interaction.commandName === "deobf" || interaction.commandName === "deobf_url" || interaction.commandName === "deobf_file") {
+    await interaction.deferReply()
+    const startTime = Date.now()
+    try {
+      const { code, source } = await resolveCode(interaction)
+      if (!code || code.trim().length === 0) throw new Error("No code found")
+      if (code.length > 500000) throw new Error("Code too large (max 500KB)")
+
+      const beautify = interaction.options.getBoolean("beautify") !== false
+      const deobf = new Deobfuscator(code, { beautify })
+      await deobf.run()
+
+      const elapsed = Date.now() - startTime
+      const ratio = ((1 - deobf.stats.finalSize / deobf.stats.originalSize) * 100).toFixed(1)
+
+      const embed = new EmbedBuilder()
+        .setColor(deobf.stats.isNested ? 0x9933ff : 0x00ff88)
+        .setTitle("🚀 Deobfuscation Complete (V6)")
+        .setDescription(`**Source:** ${source}`)
+        .addFields(
+          { name: "🎯 Type", value: deobf.detection.name, inline: true },
+          { name: "🎚️ Confidence", value: `${deobf.detection.confidence}%`, inline: true },
+          { name: "🧅 Layers", value: deobf.stats.isNested ? `${deobf.stats.layerCount}` : "1", inline: true },
+          { name: "📊 Original", value: `${deobf.stats.originalLines.toLocaleString()} lines\n${deobf.stats.originalSize.toLocaleString()} bytes`, inline: true },
+          { name: "📉 Final", value: `${deobf.stats.finalLines.toLocaleString()} lines\n${deobf.stats.finalSize.toLocaleString()} bytes`, inline: true },
+          { name: "⚡ Reduced", value: `${ratio}%`, inline: true },
+        )
+
+      const decoders = []
+      if (deobf.stats.wearedevsDecoded > 0) decoders.push(`WeAreDevs: ${deobf.stats.wearedevsDecoded}`)
+      if (deobf.stats.base64Decoded > 0) decoders.push(`Base64: ${deobf.stats.base64Decoded}`)
+      if (deobf.stats.base32Decoded > 0) decoders.push(`Base32: ${deobf.stats.base32Decoded}`)
+      if (deobf.stats.base58Decoded > 0) decoders.push(`Base58: ${deobf.stats.base58Decoded}`)
+      if (deobf.stats.base91Decoded > 0) decoders.push(`Base91: ${deobf.stats.base91Decoded}`)
+      if (deobf.stats.hexDecoded > 0) decoders.push(`Hex: ${deobf.stats.hexDecoded}`)
+      if (deobf.stats.octalDecoded > 0) decoders.push(`Octal: ${deobf.stats.octalDecoded}`)
+      if (deobf.stats.urlDecoded > 0) decoders.push(`URL: ${deobf.stats.urlDecoded}`)
+      if (deobf.stats.ascii85Decoded > 0) decoders.push(`Ascii85: ${deobf.stats.ascii85Decoded}`)
+      if (deobf.stats.customB64Decoded > 0) decoders.push(`CustomB64: ${deobf.stats.customB64Decoded}`)
+      if (deobf.stats.escapesDecoded > 0) decoders.push(`Escapes: ${deobf.stats.escapesDecoded}`)
+      if (deobf.stats.stringRefsResolved > 0) decoders.push(`StringRefs: ${deobf.stats.stringRefsResolved}`)
+      if (deobf.stats.mathSimplified > 0) decoders.push(`Math: ${deobf.stats.mathSimplified}`)
+      if (deobf.stats.antiDebugRemoved > 0) decoders.push(`AntiDebug: ${deobf.stats.antiDebugRemoved}`)
+      if (deobf.stats.xorDecoded > 0) decoders.push(`XOR: ${deobf.stats.xorDecoded}`)
+      if (deobf.stats.extractedAlphabet) decoders.push(`Alphabet: extracted`)
+
+      if (decoders.length > 0) {
+        embed.addFields({ name: "🔓 Decoded", value: decoders.join(" • ").slice(0, 1000) })
       }
-      try {
-        const res = await fetch(attachment.url)
-        const code = await res.text()
-        return await processAndReply(interaction, code, `File: ${attachment.name}`)
-      } catch (e) {
-        return interaction.editReply({ content: `File read failed: ${e.message}` })
+      if (deobf.stats.isNested && deobf.layers.length > 0) {
+        const layerText = deobf.layers.map(l => `L${l.depth}: ${l.name} (${l.confidence}%)`).join(" → ")
+        embed.addFields({ name: "🧅 Layer Chain", value: layerText.slice(0, 1000) })
       }
+      if (deobf.webhooks.length > 0) {
+        embed.addFields({ name: "⚠️ Webhooks", value: deobf.webhooks.slice(0, 3).map(w => `\`${w.slice(0, 80)}\``).join("\n").slice(0, 1000) })
+      }
+      if (deobf.keys.length > 0) {
+        embed.addFields({ name: "🔑 Possible Keys", value: deobf.keys.slice(0, 5).map(k => `\`${k}\``).join("\n").slice(0, 1000) })
+      }
+      embed.addFields({ name: "⏱️ Time", value: `${elapsed}ms`, inline: true })
+      embed.addFields({ name: "📈 Entropy", value: `${deobf.stats.entropy}`, inline: true })
+      embed.setTimestamp().setFooter({ text: "V6 • Advanced Deobfuscation" })
+
+      const report = buildReport(deobf)
+      const buffer = Buffer.from(report, "utf-8")
+      const attachment = new AttachmentBuilder(buffer, { name: "deobfuscated.txt" })
+
+      await interaction.editReply({ embeds: [embed], files: [attachment] })
+    } catch (error) {
+      Logger.log("ERROR", "Deobfuscation failed", { error: error.message })
+      const embed = new EmbedBuilder()
+        .setColor(0xff0000)
+        .setTitle("❌ Deobfuscation Failed")
+        .setDescription(`**Error:** ${error.message}`)
+        .setTimestamp()
+      await interaction.editReply({ embeds: [embed] })
     }
-  } catch (e) {
-    logger.log("ERROR", "Error", { error: e.message })
-    try { await interaction.editReply({ content: `Error: ${e.message}` }) } catch (e2) {}
+    return
   }
 })
 
-logger.log("INFO", "Starting...")
-client.login(process.env.DISCORD_TOKEN).catch(e => {
-  logger.log("ERROR", "Login failed", { error: e.message })
+client.on("error", (error) => Logger.log("ERROR", "Client error", { error: error.message }))
+process.on("unhandledRejection", (error) => Logger.log("ERROR", "Unhandled rejection", { error: error?.message || error }))
+
+if (!process.env.DISCORD_TOKEN) {
+  Logger.log("ERROR", "DISCORD_TOKEN missing")
+  process.exit(1)
+}
+if (!process.env.CLIENT_ID) {
+  Logger.log("ERROR", "CLIENT_ID missing")
+  process.exit(1)
+}
+
+Logger.log("INFO", "Starting bot V6...")
+client.login(process.env.DISCORD_TOKEN).catch((error) => {
+  Logger.log("ERROR", "Login failed", { error: error.message })
   process.exit(1)
 })
