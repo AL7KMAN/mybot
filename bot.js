@@ -692,6 +692,13 @@ class Deobfuscator {
   }
 }
 
+class Logger {
+  constructor() { this.start = Date.now() }
+  log(level, msg, data = {}) {
+    const colors = { INFO: "\x1b[36m", WARN: "\x1b[33m", ERROR: "\x1b[31m", SUCCESS: "\x1b[32m", DEBUG: "\x1b[35m" }
+    console.log(`${colors[level] || ""}[${level}] ${msg}\x1b[0m`, Object.keys(data).length ? data : "")
+  }
+}
 const logger = new Logger()
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] })
