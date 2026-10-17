@@ -26,8 +26,7 @@ class PythonBridge {
         args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
       } else if (tool === "moonsec") {
         cmd = "dotnet";
-        args = [path.join(__dirname, "tools/MoonsecDeobfuscator/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
-      } else {
+        args = [path.join(__dirname, "tools/moonsec/MoonsecDeobfuscator/bin/Release/net9.0/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
         return reject(new Error("Unknown tool"));
       }
 
@@ -1390,30 +1389,37 @@ client.on("interactionCreate", async (interaction) => {
       if (code.length > 500000) throw new Error("Code too large (max 500KB)")
 
       const quickDetect = new Detector(code).detect()
-      if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs") {
-        await interaction.editReply({ content: `🐍 **${quickDetect.name}** detected — running specialized Python tool...` })
-        try {
-          const tempIn = path.join(__dirname, `temp_${Date.now()}.lua`)
-          fs.writeFileSync(tempIn, code)
-          const tool = quickDetect.name === "Prometheus" ? "prometheus" : "wearedevs"
-          const resultCode = await PythonBridge.run(tool, tempIn)
-          try { fs.unlinkSync(tempIn); } catch (e) {}
-          
-          const embed = new EmbedBuilder()
-            .setColor(0x00ff88)
-            .setTitle("✅ Deobfuscation Complete (Python)")
-            .setDescription(`**Tool:** ${tool} \n**Type:** ${quickDetect.name}`)
-            .addFields({ name: "📊 Result Length", value: `${resultCode.length} chars` })
-            .setTimestamp()
-          const buffer = Buffer.from(resultCode, "utf-8")
-          const attachment = new AttachmentBuilder(buffer, { name: "deobfuscated_python.lua" })
-          await interaction.editReply({ embeds: [embed], files: [attachment] })
-          return
-        } catch (error) {
-          Logger.log("ERROR", "Python tool failed", { error: error.message })
-          await interaction.editReply({ content: `⚠️ Python tool failed: \`${error.message}\`\nFalling back to JS engine...` })
-        }
-      }
+if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs" || quickDetect.name === "Moonsec V3") {
+  await interaction.editReply({ content: `🐍 **${quickDetect.name}** detected — running specialized tool...` })
+  try {
+    const tempIn = path.join(__dirname, `temp_${Date.now()}.lua`)
+    fs.writeFileSync(tempIn, code)
+    const tool = quickDetect.name === "Prometheus" ? "prometheus" : quickDetect.name === "WeAreDevs" ? "wearedevs" : "moonsec"
+    const resultCode = await PythonBridge.run(tool, tempIn)
+    try { fs.unlinkSync(tempIn); } catch (e) {}
+    
+    const embed = new EmbedBuilder()
+      .setColor(0x00ff88)
+      .setTitle("✅ Deobfuscation Complete")
+      .setDescription(`**Tool:** ${tool} \n**Type:** ${quickDetect.name}`)
+      .addFields({ name: "📊 Result Length", value: `${resultCode.length} chars` })
+      .setTimestamp()
+    
+    let finalBuffer = Buffer.from(resultCode, "utf-8")
+    let finalName = "deobfuscated_python.lua"
+    if (resultCode.startsWith("BYTECODE_HEX:")) {
+       finalBuffer = Buffer.from(resultCode.replace("BYTECODE_HEX:", ""), "hex")
+       finalName = "deobfuscated_bytecode.luac"
+    }
+
+    const attachment = new AttachmentBuilder(finalBuffer, { name: finalName })
+    await interaction.editReply({ embeds: [embed], files: [attachment] })
+    return
+  } catch (error) {
+    Logger.log("ERROR", "External tool failed", { error: error.message })
+    await interaction.editReply({ content: `⚠️ Tool failed: \`${error.message}\`\nFalling back to JS engine...` })
+  }
+}
 
       const beautify = interaction.options.getBoolean("beautify") !== false
       const deobf = new Deobfuscator(code, { beautify })
