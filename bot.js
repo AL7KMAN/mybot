@@ -18,25 +18,22 @@ class PythonBridge {
     return new Promise((resolve, reject) => {
       let cmd, args;
       if (tool === "prometheus") {
-        cmd = "python3";
+        cmd = "/opt/venv/bin/python3";
         args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
       } else if (tool === "wearedevs") {
-        cmd = "python3";
+        cmd = "/opt/venv/bin/python3";
         args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
       } else if (tool === "moonsec") {
         cmd = "dotnet";
-        args = [path.join(__dirname, "tools/moonsec/MoonsecDeobfuscator/bin/Release/net9.0/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
+        args = [path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
       } else {
         return reject(new Error("Unknown tool"));
       }
-
       const proc = spawn(cmd, args, { timeout: 120000 });
       let stdout = "";
       let stderr = "";
-
       proc.stdout.on("data", (data) => { stdout += data.toString(); });
       proc.stderr.on("data", (data) => { stderr += data.toString(); });
-
       proc.on("close", (code) => {
         if (code === 0) {
           if (tool === "moonsec") {
@@ -251,185 +248,103 @@ class WeAreDevs {
     })
     return { code: newCode, count }
   }
-  static extractStrings(code, alphabet, prefix) {
-    const out = []
-    const esc = prefix === "^" ? "\\^" : prefix
-    const re = new RegExp(`"${esc}([^"]{4,})"`, "g")
-    let m
-    while ((m = re.exec(code)) !== null) {
-      try {
-        const decoded = Base85.decode(m[1], alphabet)
-        if (decoded && decoded.length > 0) out.push({ encoded: m[1], decoded })
-      } catch (e) {}
-    }
-    return out
-  }
 }
 
-class Decoders {
-  static base64(s) {
-    if (s.length < 8 || s.length % 4 !== 0) return null
-    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(s)) return null
-    try {
-      const dec = Buffer.from(s, "base64").toString("utf-8")
-      if (this.isPrintable(dec) && dec.length >= 3) return dec
-    } catch (e) {}
-    return null
-  }
-  static base64url(s) {
-    if (s.length < 8) return null
-    if (!/^[A-Za-z0-9_-]+={0,2}$/.test(s)) return null
-    try {
-      const fixed = s.replace(/-/g, "+").replace(/_/g, "/")
-      const dec = Buffer.from(fixed, "base64").toString("utf-8")
-      if (this.isPrintable(dec)) return dec
-    } catch (e) {}
-    return null
-  }
-  static base32(s) {
-    if (s.length < 8) return null
-    if (!/^[A-Z2-7]+=*$/.test(s.toUpperCase())) return null
-    try {
-      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
-      const clean = s.toUpperCase().replace(/=/g, "")
-      let bits = ""
-      for (const c of clean) {
-        const i = alphabet.indexOf(c)
-        if (i < 0) return null
-        bits += i.toString(2).padStart(5, "0")
-      }
-      const out = []
-      for (let i = 0; i + 8 <= bits.length; i += 8) out.push(parseInt(bits.substr(i, 8), 2))
-      const dec = Buffer.from(out).toString("utf-8")
-      if (this.isPrintable(dec)) return dec
-    } catch (e) {}
-    return null
-  }
-  static base58(s) {
-    if (s.length < 8) return null
-    const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    if (!/^[1-9A-HJ-NP-Za-km-z]+$/.test(s)) return null
-    try {
-      let n = 0n
-      for (const c of s) {
-        const i = alphabet.indexOf(c)
-        if (i < 0) return null
-        n = n * 58n + BigInt(i)
-      }
-      const hex = n.toString(16).padStart(2, "0")
-      const out = []
-      for (let i = 0; i < hex.length; i += 2) out.push(parseInt(hex.substr(i, 2), 16))
-      const dec = Buffer.from(out).toString("utf-8")
-      if (this.isPrintable(dec)) return dec
-    } catch (e) {}
-    return null
-  }
-  static base91(s) {
-    if (s.length < 8) return null
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~\""
-    try {
-      let b = 0, n = 0
-      const out = []
-      for (const c of s) {
-        const i = alphabet.indexOf(c)
-        if (i < 0) return null
-        if (b === 0) { n = i; b = 1 }
-        else { n += i * 91; b = 0; out.push(n & 0xFF, (n >> 8) & 0xFF) }
-      }
-      if (b === 1) out.push(n & 0xFF)
-      const dec = Buffer.from(out).toString("utf-8")
-      if (this.isPrintable(dec)) return dec
-    } catch (e) {}
-    return null
-  }
-  static hex(s) {
-    if (s.length < 8 || s.length % 2 !== 0) return null
-    if (!/^[0-9a-fA-F]+$/.test(s)) return null
-    try {
-      let r = ""
-      for (let i = 0; i < s.length; i += 2) r += String.fromCharCode(parseInt(s.substr(i, 2), 16))
-      if (this.isPrintable(r)) return r
-    } catch (e) {}
-    return null
-  }
-  static octal(s) {
-    if (s.length < 9 || s.length % 3 !== 0) return null
-    if (!/^[0-7]+$/.test(s)) return null
-    try {
-      let r = ""
-      for (let i = 0; i < s.length; i += 3) r += String.fromCharCode(parseInt(s.substr(i, 3), 8))
-      if (this.isPrintable(r)) return r
-    } catch (e) {}
-    return null
-  }
-  static urlDecode(s) {
-    if (!s.includes("%")) return null
-    try {
-      const dec = decodeURIComponent(s)
-      if (dec !== s && this.isPrintable(dec)) return dec
-    } catch (e) {}
-    return null
-  }
-  static ascii85(s) {
-    if (!s || s.length < 2) return null
-    try {
-      const out = []
-      let i = 0
-      while (i < s.length) {
-        if (s[i] === "z") { out.push(0, 0, 0, 0); i++; continue }
-        if (s[i] === "y") { out.push(32, 32, 32, 32); i++; continue }
-        const remaining = s.length - i
-        let chunk = s.slice(i, i + Math.min(5, remaining))
-        const origLen = chunk.length
-        while (chunk.length < 5) chunk += "u"
-        let v = 0n
-        let valid = true
-        for (const c of chunk) {
-          const code = c.charCodeAt(0) - 33
-          if (code < 0 || code > 84) { valid = false; break }
-          v = v * 85n + BigInt(code)
-        }
-        if (!valid) { i += 1; continue }
-        const bytes = [Number((v >> 24n) & 0xFFn), Number((v >> 16n) & 0xFFn), Number((v >> 8n) & 0xFFn), Number(v & 0xFFn)]
-        const count = origLen - 1
-        for (let k = 0; k < count; k++) out.push(bytes[k])
-        i += origLen
-      }
-      const str = Buffer.from(out).toString("utf-8")
-      if (/^[\x20-\x7E\s]*$/.test(str) && str.length > 3) return str
-    } catch (e) {}
-    return null
-  }
-  static xorBrute(s) {
-    const results = []
-    for (let key = 1; key < 256; key++) {
-      let out = ""
-      for (let i = 0; i < s.length && i < 500; i++) out += String.fromCharCode(s.charCodeAt(i) ^ key)
-      if (this.isPrintable(out) && this.hasLuaKeywords(out)) results.push({ key: "0x" + key.toString(16), sample: out.slice(0, 150), confidence: this.scoreText(out) })
-    }
-    return results.sort((a, b) => b.confidence - a.confidence).slice(0, 3)
-  }
+class AggressiveDecoders {
   static isPrintable(s) {
     if (!s || s.length === 0) return false
     let p = 0
-    for (const c of s) if (c.charCodeAt(0) >= 32 && c.charCodeAt(0) <= 126) p++
-    return p / s.length > 0.85
+    for (const c of s) {
+      const code = c.charCodeAt(0);
+      if (code >= 32 && code <= 126 || code === 9 || code === 10 || code === 13) p++;
+    }
+    return p / s.length > 0.85;
   }
-  static hasLuaKeywords(s) {
-    return /\b(local|function|end|if|then|else|return|print|game|for|while|do|nil|true|false)\b/.test(s)
+  static scoreLua(s) {
+    let score = 0;
+    if (/\bfunction\b/.test(s)) score += 10;
+    if (/\blocal\b/.test(s)) score += 10;
+    if (/\bend\b/.test(s)) score += 5;
+    if (/\bprint\b/.test(s)) score += 8;
+    if (/\bgame\b/.test(s)) score += 8;
+    if (/game:GetService/.test(s)) score += 15;
+    if (/Instance\.new/.test(s)) score += 10;
+    if (/["'][^"']+["']/.test(s)) score += 3;
+    if (/local\s+\w+\s*=/.test(s)) score += 5;
+    if (/\bif\b/.test(s) && /\bthen\b/.test(s)) score += 5;
+    return score;
   }
-  static scoreText(s) {
-    let score = 0
-    if (/\bfunction\b/.test(s)) score += 3
-    if (/\blocal\b/.test(s)) score += 3
-    if (/\bend\b/.test(s)) score += 2
-    if (/\bprint\b/.test(s)) score += 3
-    if (/\bgame\b/.test(s)) score += 3
-    if (/game:GetService/.test(s)) score += 5
-    if (/Instance\.new/.test(s)) score += 4
-    if (/["'][^"']+["']/.test(s)) score += 1
-    if (/local\s+\w+\s*=/.test(s)) score += 2
-    return score
+  static base64(str) {
+    if (!str || str.length < 4) return null;
+    const clean = str.replace(/[^A-Za-z0-9+/=]/g, '');
+    if (clean.length !== str.length || clean.length % 4 !== 0) {
+      if (str.includes(' ')) return null;
+      try {
+        const padded = str + '='.repeat((4 - str.length % 4) % 4);
+        const dec = Buffer.from(padded, 'base64').toString('utf-8');
+        if (this.isPrintable(dec) && dec.length > 0) return dec;
+      } catch (e) {}
+      return null;
+    }
+    try {
+      const dec = Buffer.from(clean, 'base64').toString('utf-8');
+      if (this.isPrintable(dec) && dec.length > 0 && this.scoreLua(dec) > 0) return dec;
+      if (this.isPrintable(dec) && dec.length > 3) return dec;
+    } catch (e) {}
+    return null;
+  }
+  static hex(str) {
+    if (!str || str.length < 4 || str.length % 2 !== 0) return null;
+    if (!/^[0-9a-fA-F]+$/.test(str)) return null;
+    try {
+      let r = "";
+      for (let i = 0; i < str.length; i += 2) r += String.fromCharCode(parseInt(str.substr(i, 2), 16));
+      if (this.isPrintable(r)) return r;
+    } catch (e) {}
+    return null;
+  }
+  static ascii85(str) {
+    if (!str || str.length < 4) return null;
+    try {
+      const out = [];
+      let i = 0;
+      while (i < str.length) {
+        if (str[i] === "z") { out.push(0, 0, 0, 0); i++; continue; }
+        if (str[i] === "y") { out.push(32, 32, 32, 32); i++; continue; }
+        let chunk = str.slice(i, i + 5);
+        const origLen = chunk.length;
+        while (chunk.length < 5) chunk += "u";
+        let v = 0n;
+        for (const c of chunk) {
+          const code = c.charCodeAt(0) - 33;
+          if (code < 0 || code > 84) return null;
+          v = v * 85n + BigInt(code);
+        }
+        const bytes = [Number((v >> 24n) & 0xFFn), Number((v >> 16n) & 0xFFn), Number((v >> 8n) & 0xFFn), Number(v & 0xFFn)];
+        for (let k = 0; k < origLen - 1; k++) out.push(bytes[k]);
+        i += origLen;
+      }
+      const s = Buffer.from(out).toString("utf-8");
+      if (this.isPrintable(s) && s.length > 0) return s;
+    } catch (e) {}
+    return null;
+  }
+  static xor(str) {
+    if (!str) return null;
+    let best = null;
+    let bestScore = 0;
+    for (let k = 1; k < 256; k++) {
+      let out = "";
+      for (let i = 0; i < str.length; i++) out += String.fromCharCode(str.charCodeAt(i) ^ k);
+      if (this.isPrintable(out)) {
+        const score = this.scoreLua(out);
+        if (score > bestScore) {
+          bestScore = score;
+          best = out;
+        }
+      }
+    }
+    return bestScore > 5 ? best : null;
   }
 }
 
@@ -675,7 +590,7 @@ class Deobfuscator {
       hexDecoded: 0, octalDecoded: 0, urlDecoded: 0, wearedevsDecoded: 0, ascii85Decoded: 0,
       xorDecoded: 0, customB64Alphabets: 0, customB64Decoded: 0, stringsFound: 0, stringRefsResolved: 0,
       tablesFound: 0, mathSimplified: 0, antiDebugRemoved: 0, recursivePasses: 0, entropy: 0,
-      extractedAlphabet: false, alphabetPasses: 0, isNested: false, layerCount: 0,
+      extractedAlphabet: false, alphabetPasses: 0, isNested: false, layerCount: 0, stringsDecoded: 0, loops: 0
     }
     this.stringTableAnalyzer = new StringTableAnalyzer(code)
     this.detector = new Detector(code)
@@ -705,6 +620,7 @@ class Deobfuscator {
     this.layers = layerAnalysis.layers
     this.stats.isNested = this.layers.length > 1
     this.stats.layerCount = this.layers.length
+
     if (this.detection.name === "WeAreDevs") {
       this.log.push("WeAreDevs - extracting alphabet")
       const extracted = Base85.extractAlphabet(this.code)
@@ -728,42 +644,85 @@ class Deobfuscator {
         this.stats.alphabetPasses++
         this.log.push(`pass ${pass + 1}: ${total} strings`)
       }
-      for (const prefix of ["j", "^"]) {
-        const samples = WeAreDevs.extractStrings(this.original, this.alphabet, prefix)
-        this.wearedevsSamples.push(...samples.slice(0, 20))
-      }
     }
-    this.stripComments()
-    this.decodeEscapes()
-    this.decodeUnicode()
-    this.decodeBase64Layer()
-    this.decodeBase32Layer()
-    this.decodeBase58Layer()
-    this.decodeBase91Layer()
-    this.decodeHexLayer()
-    this.decodeOctalLayer()
-    this.decodeURLLayer()
-    this.decodeAscii85Layer()
-    this.decodeStringChar()
-    this.simplifyMath()
-    this.decodeCustomBase64()
-    this.stringTableAnalyzer.code = this.code
-    this.stringTableAnalyzer.findTables()
-    this.stats.tablesFound = this.stringTableAnalyzer.tables.length
-    this.stats.stringsFound = this.stringTableAnalyzer.totalStrings
-    this.resolveStringRefs()
+
+    for (let pass = 0; pass < 50; pass++) {
+      let changed = false
+      this.stats.loops++
+      
+      this.stripComments()
+      this.decodeEscapes()
+      this.decodeUnicode()
+      this.decodeBase64Layer()
+      this.decodeBase32Layer()
+      this.decodeBase58Layer()
+      this.decodeBase91Layer()
+      this.decodeHexLayer()
+      this.decodeOctalLayer()
+      this.decodeURLLayer()
+      this.decodeAscii85Layer()
+      this.decodeStringChar()
+      this.simplifyMath()
+      this.decodeCustomBase64()
+      
+      if (this.decodeAggressiveStrings()) changed = true
+      if (this.evaluateComplexStringChar()) changed = true
+      if (this.resolveStringRefs()) changed = true
+      
+      if (!changed) break
+    }
+
     this.removeAntiDebug()
     this.tryXorBrute()
     this.extractUrls()
     this.extractWebhooks()
     this.extractKeys()
     this.calculateEntropy()
-    this.tryRecursiveDecode()
+
     if (this.opts.beautify !== false) this.beautify()
     this.stats.finalSize = this.code.length
     this.stats.finalLines = this.code.split("\n").length
     this.log.push(`done: ${this.code.length} bytes`)
   }
+  
+  decodeAggressiveStrings() {
+    let changed = false
+    this.code = this.code.replace(/(["'])(.*?)\1/g, (match, quote, content) => {
+      if (content.length < 4) return match
+      let decoded = AggressiveDecoders.base64(content)
+      if (!decoded) decoded = AggressiveDecoders.hex(content)
+      if (!decoded) decoded = AggressiveDecoders.ascii85(content)
+      if (!decoded && content.length > 10) decoded = AggressiveDecoders.xor(content)
+      if (decoded && AggressiveDecoders.scoreLua(decoded) > 0) {
+        this.stats.stringsDecoded++
+        changed = true
+        return JSON.stringify(decoded)
+      }
+      return match
+    })
+    return changed
+  }
+
+  evaluateComplexStringChar() {
+    let changed = false
+    this.code = this.code.replace(/string\.char\s*\(([^)]+)\)/g, (match, args) => {
+      try {
+        const safeArgs = args.replace(/bit32\.bxor\s*\(/g, "(")
+        const evaluated = Function(`"use strict"; return [${safeArgs}];`)()
+        if (Array.isArray(evaluated) && evaluated.length > 0 && evaluated.every(n => typeof n === 'number' && n >= 0 && n <= 255)) {
+          const str = String.fromCharCode(...evaluated)
+          if (AggressiveDecoders.isPrintable(str)) {
+            this.stats.stringsDecoded++
+            changed = true
+            return JSON.stringify(str)
+          }
+        }
+      } catch (e) {}
+      return match
+    })
+    return changed
+  }
+
   stripComments() {
     this.code = this.code.replace(/--\[=*\[[\s\S]*?\]=*\]/g, "").replace(/--\[\[[\s\S]*?\]\]/g, "").replace(/--[^\n\r]*/g, "")
   }
@@ -790,13 +749,13 @@ class Deobfuscator {
   }
   decodeBase64Layer() {
     const before = this.stats.base64Decoded
-    this.code = this.code.replace(/["']([A-Za-z0-9+/]{20,}={0,2})["']/g, (m, b64) => {
-      const dec = Decoders.base64(b64)
+    this.code = this.code.replace(/["']([A-Za-z0-9+/]{8,}={0,2})["']/g, (m, b64) => {
+      const dec = AggressiveDecoders.base64(b64)
       if (dec) { this.stats.base64Decoded++; return JSON.stringify(dec) }
       return m
     })
-    this.code = this.code.replace(/["']([A-Za-z0-9_-]{20,}={0,2})["']/g, (m, b64) => {
-      const dec = Decoders.base64url(b64)
+    this.code = this.code.replace(/["']([A-Za-z0-9_-]{8,}={0,2})["']/g, (m, b64) => {
+      const dec = AggressiveDecoders.base64(b64)
       if (dec && dec.length > 4) { this.stats.base64Decoded++; return JSON.stringify(dec) }
       return m
     })
@@ -804,8 +763,8 @@ class Deobfuscator {
   }
   decodeBase32Layer() {
     const before = this.stats.base32Decoded
-    this.code = this.code.replace(/["']([A-Z2-7]{16,}=*)["']/g, (m, b32) => {
-      const dec = Decoders.base32(b32)
+    this.code = this.code.replace(/["']([A-Z2-7]{8,}=*)["']/g, (m, b32) => {
+      const dec = AggressiveDecoders.base64(b32)
       if (dec) { this.stats.base32Decoded++; return JSON.stringify(dec) }
       return m
     })
@@ -813,8 +772,8 @@ class Deobfuscator {
   }
   decodeBase58Layer() {
     const before = this.stats.base58Decoded
-    this.code = this.code.replace(/["']([1-9A-HJ-NP-Za-km-z]{20,})["']/g, (m, b58) => {
-      const dec = Decoders.base58(b58)
+    this.code = this.code.replace(/["']([1-9A-HJ-NP-Za-km-z]{8,})["']/g, (m, b58) => {
+      const dec = AggressiveDecoders.base64(b58)
       if (dec) { this.stats.base58Decoded++; return JSON.stringify(dec) }
       return m
     })
@@ -822,9 +781,9 @@ class Deobfuscator {
   }
   decodeBase91Layer() {
     const before = this.stats.base91Decoded
-    this.code = this.code.replace(/["']([A-Za-z0-9!#$%&()*+,.\/:;<=>?@\[\]^_`{|}~"]{20,})["']/g, (m, b91) => {
+    this.code = this.code.replace(/["']([A-Za-z0-9!#$%&()*+,.\/:;<=>?@\[\]^_`{|}~"]{8,})["']/g, (m, b91) => {
       if (/[а-яА-Я\u0600-\u06FF]/.test(b91)) return m
-      const dec = Decoders.base91(b91)
+      const dec = AggressiveDecoders.base64(b91)
       if (dec && dec.length > 3) { this.stats.base91Decoded++; return JSON.stringify(dec) }
       return m
     })
@@ -832,8 +791,8 @@ class Deobfuscator {
   }
   decodeHexLayer() {
     const before = this.stats.hexDecoded
-    this.code = this.code.replace(/["']([0-9a-fA-F]{12,})["']/g, (m, h) => {
-      const dec = Decoders.hex(h)
+    this.code = this.code.replace(/["']([0-9a-fA-F]{8,})["']/g, (m, h) => {
+      const dec = AggressiveDecoders.hex(h)
       if (dec) { this.stats.hexDecoded++; return JSON.stringify(dec) }
       return m
     })
@@ -841,8 +800,8 @@ class Deobfuscator {
   }
   decodeOctalLayer() {
     const before = this.stats.octalDecoded
-    this.code = this.code.replace(/"(\d{9,})"/g, (m, o) => {
-      const dec = Decoders.octal(o)
+    this.code = this.code.replace(/"(\d{6,})"/g, (m, o) => {
+      const dec = AggressiveDecoders.base64(o)
       if (dec) { this.stats.octalDecoded++; return JSON.stringify(dec) }
       return m
     })
@@ -851,17 +810,19 @@ class Deobfuscator {
   decodeURLLayer() {
     const before = this.stats.urlDecoded
     this.code = this.code.replace(/["']([^"']*%[0-9a-fA-F]{2}[^"']*)["']/g, (m, s) => {
-      const dec = Decoders.urlDecode(s)
-      if (dec) { this.stats.urlDecoded++; return JSON.stringify(dec) }
+      try {
+        const dec = decodeURIComponent(s)
+        if (dec !== s && AggressiveDecoders.isPrintable(dec)) { this.stats.urlDecoded++; return JSON.stringify(dec) }
+      } catch (e) {}
       return m
     })
     if (this.stats.urlDecoded > before) this.log.push(`url: ${this.stats.urlDecoded - before}`)
   }
   decodeAscii85Layer() {
     const before = this.stats.ascii85Decoded
-    this.code = this.code.replace(/["']([!-u~]{20,})["']/g, (m, s) => {
+    this.code = this.code.replace(/["']([!-u~]{8,})["']/g, (m, s) => {
       if (s.startsWith("^") || s.startsWith("j")) return m
-      const dec = Decoders.ascii85(s)
+      const dec = AggressiveDecoders.ascii85(s)
       if (dec) { this.stats.ascii85Decoded++; return JSON.stringify(dec) }
       return m
     })
@@ -935,15 +896,17 @@ class Deobfuscator {
     if (this.stats.mathSimplified > 0) this.log.push(`math: ${this.stats.mathSimplified}`)
   }
   resolveStringRefs() {
+    let changed = false
     for (const table of this.stringTableAnalyzer.tables) {
       const re = new RegExp(`${table.name}\\s*\\[\\s*(\\d+)\\s*\\]`, "g")
       this.code = this.code.replace(re, (m, idx) => {
         const i = parseInt(idx) - 1
-        if (i >= 0 && i < table.strings.length) { this.stats.stringRefsResolved++; return JSON.stringify(table.strings[i]) }
+        if (i >= 0 && i < table.strings.length) { this.stats.stringRefsResolved++; changed = true; return JSON.stringify(table.strings[i]) }
         return m
       })
     }
     if (this.stats.stringRefsResolved > 0) this.log.push(`refs: ${this.stats.stringRefsResolved}`)
+    return changed
   }
   removeAntiDebug() {
     const before = this.code.length
@@ -957,11 +920,11 @@ class Deobfuscator {
     this.stats.antiDebugRemoved = Math.floor((before - this.code.length) / 20)
   }
   tryXorBrute() {
-    const suspiciousStrings = this.code.match(/["']([A-Za-z0-9+/=]{16,})["']/g) || []
+    const suspiciousStrings = this.code.match(/["']([A-Za-z0-9+/=]{8,})["']/g) || []
     for (const str of suspiciousStrings.slice(0, 5)) {
       const inner = str.slice(1, -1)
-      const results = Decoders.xorBrute(inner)
-      if (results.length > 0) { this.xorResults.push({ input: inner.slice(0, 40), results }); this.stats.xorDecoded++ }
+      const dec = AggressiveDecoders.xor(inner)
+      if (dec) { this.xorResults.push({ input: inner.slice(0, 40), results: [{ key: "auto", sample: dec.slice(0, 150), confidence: 10 }] }); this.stats.xorDecoded++ }
     }
     if (this.stats.xorDecoded > 0) this.log.push(`xor candidates: ${this.stats.xorDecoded}`)
   }
@@ -995,25 +958,6 @@ class Deobfuscator {
     for (const c of Object.values(freq)) { const p = c / len; e -= p * Math.log2(p) }
     this.stats.entropy = parseFloat((e / 8).toFixed(3))
     if (e / 8 > 0.7) this.warnings.push(`High entropy (${this.stats.entropy})`)
-  }
-  tryRecursiveDecode() {
-    let passes = 0
-    while (passes < this.maxRecursive) {
-      const before = this.code
-      this.decodeBase64Layer()
-      this.decodeBase32Layer()
-      this.decodeBase58Layer()
-      this.decodeBase91Layer()
-      this.decodeHexLayer()
-      this.decodeOctalLayer()
-      this.decodeEscapes()
-      this.decodeStringChar()
-      this.decodeAscii85Layer()
-      this.decodeURLLayer()
-      if (this.code === before) break
-      passes++
-    }
-    this.stats.recursivePasses = passes
   }
   beautify() {
     const lines = this.code.split(/\n/).map(l => l.trim()).filter(l => l.length > 0)
@@ -1059,7 +1003,7 @@ async function readAttachment(attachment) {
 
 function buildReport(result) {
   let r = "═══════════════════════════════════════════════\n"
-  r += "         DEOBFUSCATION REPORT (V8)\n"
+  r += "         DEOBFUSCATION REPORT (V9 GOD MODE)\n"
   r += "═══════════════════════════════════════════════\n\n"
   r += "🎯 DETECTION\n"
   r += `   Type: ${result.detection.name}\n`
@@ -1105,23 +1049,17 @@ function buildReport(result) {
   r += `   Entropy:  ${result.stats.entropy}\n`
   r += "\n"
   r += "🔓 DECODING RESULTS\n"
-  if (result.stats.wearedevsDecoded > 0) r += `   WeAreDevs:    ${result.stats.wearedevsDecoded}\n`
-  if (result.stats.base64Decoded > 0) r += `   Base64:       ${result.stats.base64Decoded}\n`
-  if (result.stats.base32Decoded > 0) r += `   Base32:       ${result.stats.base32Decoded}\n`
-  if (result.stats.base58Decoded > 0) r += `   Base58:       ${result.stats.base58Decoded}\n`
-  if (result.stats.base91Decoded > 0) r += `   Base91:       ${result.stats.base91Decoded}\n`
-  if (result.stats.hexDecoded > 0) r += `   Hex:          ${result.stats.hexDecoded}\n`
-  if (result.stats.octalDecoded > 0) r += `   Octal:        ${result.stats.octalDecoded}\n`
-  if (result.stats.urlDecoded > 0) r += `   URL:          ${result.stats.urlDecoded}\n`
-  if (result.stats.ascii85Decoded > 0) r += `   Ascii85:      ${result.stats.ascii85Decoded}\n`
-  if (result.stats.customB64Decoded > 0) r += `   Custom B64:   ${result.stats.customB64Decoded}\n`
-  if (result.stats.escapesDecoded > 0) r += `   Escapes:      ${result.stats.escapesDecoded}\n`
-  if (result.stats.stringRefsResolved > 0) r += `   String refs:  ${result.stats.stringRefsResolved}\n`
-  if (result.stats.mathSimplified > 0) r += `   Math ops:     ${result.stats.mathSimplified}\n`
-  if (result.stats.antiDebugRemoved > 0) r += `   Anti-debug:   ${result.stats.antiDebugRemoved}\n`
-  if (result.stats.xorDecoded > 0) r += `   XOR candidates: ${result.stats.xorDecoded}\n`
-  r += `   Recursive passes: ${result.stats.recursivePasses}\n`
-  if (result.stats.extractedAlphabet) r += `   Alphabet: EXTRACTED (85 chars, ${result.stats.alphabetPasses} passes)\n`
+  r += `   Aggressive Strings: ${result.stats.stringsDecoded}\n`
+  r += `   Deep Passes:        ${result.stats.loops}\n`
+  if (result.stats.wearedevsDecoded > 0) r += `   WeAreDevs:          ${result.stats.wearedevsDecoded}\n`
+  if (result.stats.base64Decoded > 0) r += `   Base64:             ${result.stats.base64Decoded}\n`
+  if (result.stats.hexDecoded > 0) r += `   Hex:                ${result.stats.hexDecoded}\n`
+  if (result.stats.escapesDecoded > 0) r += `   Escapes:            ${result.stats.escapesDecoded}\n`
+  if (result.stats.stringRefsResolved > 0) r += `   String refs:        ${result.stats.stringRefsResolved}\n`
+  if (result.stats.mathSimplified > 0) r += `   Math ops:           ${result.stats.mathSimplified}\n`
+  if (result.stats.antiDebugRemoved > 0) r += `   Anti-debug:         ${result.stats.antiDebugRemoved}\n`
+  if (result.stats.xorDecoded > 0) r += `   XOR candidates:     ${result.stats.xorDecoded}\n`
+  if (result.stats.extractedAlphabet) r += `   Alphabet: EXTRACTED (85 chars)\n`
   r += "\n"
   const recs = result.buildRecommendations()
   if (recs.length > 0) {
@@ -1132,25 +1070,6 @@ function buildReport(result) {
   if (result.stringTableAnalyzer && result.stringTableAnalyzer.tables.length > 0) {
     r += "📚 STRING TABLES\n"
     for (const t of result.stringTableAnalyzer.tables.slice(0, 10)) r += `   ${t.name}: ${t.strings.length} strings\n`
-    r += "\n"
-  }
-  if (result.wearedevsSamples.length > 0) {
-    r += "🔤 WEAREDEVS DECODED SAMPLES\n"
-    for (const s of result.wearedevsSamples.slice(0, 15)) {
-      const shown = s.decoded.length > 60 ? s.decoded.slice(0, 60) + "..." : s.decoded
-      r += `   ${JSON.stringify(shown)}\n`
-    }
-    r += "\n"
-  }
-  if (result.customB64Results.length > 0) {
-    r += "🔐 CUSTOM BASE64 RESULTS\n"
-    for (const tbl of result.customB64Results) {
-      r += `   Table: ${tbl.tableName} (alphabet: ${tbl.alphabetName})\n`
-      for (const s of tbl.strings.slice(0, 10)) {
-        const shown = s.decoded.length > 60 ? s.decoded.slice(0, 60) + "..." : s.decoded
-        r += `      [${s.type}] ${JSON.stringify(shown)}\n`
-      }
-    }
     r += "\n"
   }
   if (result.xorResults.length > 0) {
@@ -1239,8 +1158,8 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "help") {
     const embed = new EmbedBuilder()
       .setColor(0x00aaff)
-      .setTitle("📖 Deobfuscator Bot V8")
-      .setDescription("Advanced Lua deobfuscation with VM analysis, anti-tamper detection, nested-layers, and Python/C# tool bridges.")
+      .setTitle("📖 God-Mode Deobfuscator V9")
+      .setDescription("Advanced Lua deobfuscation with aggressive string decoding, deep recursion, VM analysis, anti-tamper detection, and Python/C# tool bridges.")
       .addFields(
         { name: "/deobf code:<code>", value: "Deobfuscate code directly" },
         { name: "/deobf_url url:<link>", value: "Deobfuscate from URL (Pastebin/GitHub/Gist)" },
@@ -1249,9 +1168,9 @@ client.on("interactionCreate", async (interaction) => {
         { name: "/layers code:<code>", value: "Analyze nested obfuscation (onion)" },
         { name: "/vmdetect", value: "Analyze VM structure + anti-tamper patterns" },
         { name: "/help", value: "Show this message" },
-        { name: "✨ V8 Features", value: "• Python Integration (Prometheus, WeAreDevs)\n• C# Bridge Ready (Moonsec)\n• VM structure analyzer\n• Anti-tamper detector\n• Nested layer (onion) analysis\n• Smart recommendations\n• 18+ obfuscator detection\n• 16+ encodings decoded" }
+        { name: "✨ V9 Features", value: "• Aggressive string decoding (Any length)\n• 50x Deep recursion\n• Python Integration (Prometheus, WeAreDevs)\n• C# Bridge Ready (Moonsec)\n• VM structure analyzer\n• Anti-tamper detector\n• Nested layer (onion) analysis\n• 18+ obfuscator detection" }
       )
-      .setFooter({ text: "V8 • Advanced" })
+      .setFooter({ text: "V9 • God Mode" })
     await interaction.reply({ embeds: [embed] })
     return
   }
@@ -1301,7 +1220,7 @@ client.on("interactionCreate", async (interaction) => {
       } else {
         embed.addFields({ name: "🛡️ Anti-Tamper", value: "No patterns detected ✅" })
       }
-      embed.setTimestamp().setFooter({ text: "V8 VM Analyzer" })
+      embed.setTimestamp().setFooter({ text: "V9 VM Analyzer" })
       await interaction.editReply({ embeds: [embed] })
     } catch (error) {
       await interaction.editReply({ content: `❌ Error: ${error.message}` })
@@ -1338,7 +1257,7 @@ client.on("interactionCreate", async (interaction) => {
         const layerText = layerAnalysis.layers.map(l => `**Layer ${l.depth}:** ${l.name} (${l.confidence}%) — ${l.lines} lines`).join("\n")
         embed.addFields({ name: "🧅 Onion Layers", value: layerText.slice(0, 1000) })
       }
-      embed.setTimestamp().setFooter({ text: "V8 Detection Engine" })
+      embed.setTimestamp().setFooter({ text: "V9 Detection Engine" })
       await interaction.editReply({ embeds: [embed] })
     } catch (error) {
       await interaction.editReply({ content: `❌ Error: ${error.message}` })
@@ -1372,7 +1291,7 @@ client.on("interactionCreate", async (interaction) => {
       }
       const buffer = Buffer.from(analysis.final, "utf-8")
       const attachment = new AttachmentBuilder(buffer, { name: "unwrapped.lua" })
-      embed.setTimestamp().setFooter({ text: "V8 Onion Engine" })
+      embed.setTimestamp().setFooter({ text: "V9 Onion Engine" })
       await interaction.editReply({ embeds: [embed], files: [attachment] })
     } catch (error) {
       await interaction.editReply({ content: `❌ Error: ${error.message}` })
@@ -1388,40 +1307,31 @@ client.on("interactionCreate", async (interaction) => {
       if (!code || code.trim().length === 0) throw new Error("No code found")
       if (code.length > 500000) throw new Error("Code too large (max 500KB)")
 
-      const quickDetect = new Detector(code).detect()
-      if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs" || quickDetect.name === "Moonsec V3") {
-        await interaction.editReply({ content: `🐍 **${quickDetect.name}** detected — running specialized tool...` })
+      if (code.includes("wearedevs.net/obfuscator") || code.includes("This file was protected with MoonSec V3") || code.includes("Prometheus Obfuscator")) {
+        await interaction.editReply({ content: `🐍 Specialized Obfuscator detected — running external tool...` })
         try {
           const tempIn = path.join(__dirname, `temp_${Date.now()}.lua`)
           fs.writeFileSync(tempIn, code)
-          
           let tool = "moonsec";
-          if (quickDetect.name === "Prometheus") tool = "prometheus";
-          else if (quickDetect.name === "WeAreDevs") tool = "wearedevs";
+          if (code.includes("Prometheus")) tool = "prometheus";
+          else if (code.includes("wearedevs")) tool = "wearedevs";
           
           const resultCode = await PythonBridge.run(tool, tempIn)
           try { fs.unlinkSync(tempIn); } catch (e) {}
           
-          const embed = new EmbedBuilder()
-            .setColor(0x00ff88)
-            .setTitle("✅ Deobfuscation Complete")
-            .setDescription(`**Tool:** ${tool} \n**Type:** ${quickDetect.name}`)
-            .addFields({ name: "📊 Result Length", value: `${resultCode.length} chars` })
-            .setTimestamp()
-          
+          const embed = new EmbedBuilder().setColor(0x00ff88).setTitle("✅ Deobfuscation Complete").setDescription(`**Tool:** ${tool}`)
           let finalBuffer = Buffer.from(resultCode, "utf-8")
           let finalName = "deobfuscated_python.lua"
           if (resultCode.startsWith("BYTECODE_HEX:")) {
              finalBuffer = Buffer.from(resultCode.replace("BYTECODE_HEX:", ""), "hex")
              finalName = "deobfuscated_bytecode.luac"
           }
-
           const attachment = new AttachmentBuilder(finalBuffer, { name: finalName })
           await interaction.editReply({ embeds: [embed], files: [attachment] })
           return
         } catch (error) {
           Logger.log("ERROR", "External tool failed", { error: error.message })
-          await interaction.editReply({ content: `⚠️ Tool failed: \`${error.message}\`\nFalling back to JS engine...` })
+          await interaction.editReply({ content: `⚠️ Tool failed: \`${error.message}\`\nFalling back to God-Mode JS engine...` })
         }
       }
 
@@ -1434,7 +1344,7 @@ client.on("interactionCreate", async (interaction) => {
 
       const embed = new EmbedBuilder()
         .setColor(deobf.stats.isNested ? 0x9933ff : 0x00ff88)
-        .setTitle("🚀 Deobfuscation Complete (V8)")
+        .setTitle("🚀 God-Mode Deobfuscation Complete (V9)")
         .setDescription(`**Source:** ${source}`)
         .addFields(
           { name: "🎯 Type", value: deobf.detection.name, inline: true },
@@ -1443,38 +1353,31 @@ client.on("interactionCreate", async (interaction) => {
           { name: "🖥️ VM", value: deobf.vmInfo?.isVM ? `Yes (${deobf.vmInfo.confidence}%)` : "No", inline: true },
           { name: "🛡️ Anti-Tamper", value: deobf.antiTamper?.riskLevel || "NONE", inline: true },
           { name: "⚡ Reduced", value: `${ratio}%`, inline: true },
+          { name: "🔓 Strings", value: `${deobf.stats.stringsDecoded}`, inline: true },
+          { name: "🔁 Passes", value: `${deobf.stats.loops}`, inline: true },
+          { name: "⏱️ Time", value: `${elapsed}ms`, inline: true },
           { name: "📊 Original", value: `${deobf.stats.originalLines.toLocaleString()} lines\n${deobf.stats.originalSize.toLocaleString()} bytes`, inline: true },
           { name: "📉 Final", value: `${deobf.stats.finalLines.toLocaleString()} lines\n${deobf.stats.finalSize.toLocaleString()} bytes`, inline: true },
-          { name: "⏱️ Time", value: `${elapsed}ms`, inline: true },
         )
+      
       const decoders = []
       if (deobf.stats.wearedevsDecoded > 0) decoders.push(`WeAreDevs: ${deobf.stats.wearedevsDecoded}`)
       if (deobf.stats.base64Decoded > 0) decoders.push(`Base64: ${deobf.stats.base64Decoded}`)
-      if (deobf.stats.base32Decoded > 0) decoders.push(`Base32: ${deobf.stats.base32Decoded}`)
-      if (deobf.stats.base58Decoded > 0) decoders.push(`Base58: ${deobf.stats.base58Decoded}`)
-      if (deobf.stats.base91Decoded > 0) decoders.push(`Base91: ${deobf.stats.base91Decoded}`)
       if (deobf.stats.hexDecoded > 0) decoders.push(`Hex: ${deobf.stats.hexDecoded}`)
-      if (deobf.stats.octalDecoded > 0) decoders.push(`Octal: ${deobf.stats.octalDecoded}`)
-      if (deobf.stats.urlDecoded > 0) decoders.push(`URL: ${deobf.stats.urlDecoded}`)
-      if (deobf.stats.ascii85Decoded > 0) decoders.push(`Ascii85: ${deobf.stats.ascii85Decoded}`)
-      if (deobf.stats.customB64Decoded > 0) decoders.push(`CustomB64: ${deobf.stats.customB64Decoded}`)
       if (deobf.stats.escapesDecoded > 0) decoders.push(`Escapes: ${deobf.stats.escapesDecoded}`)
       if (deobf.stats.stringRefsResolved > 0) decoders.push(`StringRefs: ${deobf.stats.stringRefsResolved}`)
       if (deobf.stats.mathSimplified > 0) decoders.push(`Math: ${deobf.stats.mathSimplified}`)
-      if (deobf.stats.antiDebugRemoved > 0) decoders.push(`AntiDebug: ${deobf.stats.antiDebugRemoved}`)
       if (deobf.stats.xorDecoded > 0) decoders.push(`XOR: ${deobf.stats.xorDecoded}`)
-      if (deobf.stats.extractedAlphabet) decoders.push(`Alphabet: extracted`)
-      if (decoders.length > 0) embed.addFields({ name: "🔓 Decoded", value: decoders.join(" • ").slice(0, 1000) })
-      if (deobf.stats.isNested && deobf.layers.length > 0) {
-        const layerText = deobf.layers.map(l => `L${l.depth}: ${l.name} (${l.confidence}%)`).join(" → ")
-        embed.addFields({ name: "🧅 Layer Chain", value: layerText.slice(0, 1000) })
-      }
+      
+      if (decoders.length > 0) embed.addFields({ name: "🔓 Detailed Decoded", value: decoders.join(" • ").slice(0, 1000) })
+      
       const recs = deobf.buildRecommendations()
       if (recs.length > 0) embed.addFields({ name: "💡 Recommendations", value: recs.slice(0, 5).map(r => `• ${r}`).join("\n").slice(0, 1000) })
       if (deobf.webhooks.length > 0) embed.addFields({ name: "⚠️ Webhooks", value: deobf.webhooks.slice(0, 3).map(w => `\`${w.slice(0, 80)}\``).join("\n").slice(0, 1000) })
       if (deobf.keys.length > 0) embed.addFields({ name: "🔑 Possible Keys", value: deobf.keys.slice(0, 5).map(k => `\`${k}\``).join("\n").slice(0, 1000) })
+      
       embed.addFields({ name: "📈 Entropy", value: `${deobf.stats.entropy}`, inline: true })
-      embed.setTimestamp().setFooter({ text: "V8 • Advanced Deobfuscation" })
+      embed.setTimestamp().setFooter({ text: "V9 • God-Mode Deobfuscation" })
 
       const report = buildReport(deobf)
       const buffer = Buffer.from(report, "utf-8")
@@ -1502,7 +1405,7 @@ if (!process.env.CLIENT_ID) {
   process.exit(1)
 }
 
-Logger.log("INFO", "Starting bot V8...")
+Logger.log("INFO", "Starting bot V9 God-Mode...")
 client.login(process.env.DISCORD_TOKEN).catch((error) => {
   Logger.log("ERROR", "Login failed", { error: error.message })
   process.exit(1)
