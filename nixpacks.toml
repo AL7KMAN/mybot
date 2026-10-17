@@ -1,13 +1,15 @@
 [phases.setup]
-nixPkgs = ["nodejs_18", "python312", "git"]
+nixPkgs = ["nodejs_18", "python312", "dotnet-sdk", "git"]
 
 [phases.install]
 cmds = [
   "npm install",
   "python3.12 -m venv /opt/venv",
   "/opt/venv/bin/pip install -r requirements.txt",
+  "echo 'export PATH=/opt/venv/bin:$PATH' >> ~/.bashrc",
   "mkdir -p tools",
   "git clone https://github.com/0x251/Prometheus-Deobfuscator.git tools/prometheus",
   "git clone https://github.com/hutaoshusband/Prometheus-WeAre-Devs-Dumper.git tools/wearedevs",
-  "echo 'export PATH=/opt/venv/bin:$PATH' >> ~/.bashrc"
+  "git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec",
+  "cd tools/moonsec && dotnet build -c Release"
 ]
