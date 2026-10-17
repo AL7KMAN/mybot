@@ -2,11 +2,41 @@ const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, Attachment
 const { REST } = require("@discordjs/rest")
 const { Routes } = require("discord-api-types/v9")
 const fetch = require("node-fetch")
-
+const { spawn } = require("child_process")
+const path = require("path")
+const fs = require("fs")
 class Logger {
   static log(level, msg, data = {}) {
     const colors = { INFO: "\x1b[36m", WARN: "\x1b[33m", ERROR: "\x1b[31m", SUCCESS: "\x1b[32m", DEBUG: "\x1b[35m" }
     console.log(`${colors[level] || "\x1b[0m"}[${level}] ${msg}\x1b[0m`, data)
+  }
+}
+class PythonBridge {
+  static async run(tool, inputFile) {
+    return new Promise((resolve, reject) => {
+      let cmd, args;
+      if (tool === "prometheus") {
+        cmd = "python3";
+        args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
+      } else if (tool === "wearedevs") {
+        cmd = "python3";
+        args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
+      } else {
+        return reject(new Error("Unknown tool"));
+      }
+      const proc = spawn(cmd, args, { timeout: 120000 });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (data) => { stdout += data.toString(); });
+      proc.stderr.on("data", (data) => { stderr += data.toString(); });
+      proc.on("close", (code) => {
+        if (code === 0) {
+          resolve(stdout || "Success");
+        } else {
+          reject(new Error(`Python Error (${code}): ${stderr || "Unknown error"}`));
+        }
+      });
+    });
   }
 }
 
@@ -1490,6 +1520,31 @@ client.on("interactionCreate", async (interaction) => {
       const { code, source } = await resolveCode(interaction)
       if (!code || code.trim().length === 0) throw new Error("No code found")
       if (code.length > 500000) throw new Error("Code too large (max 500KB)")
+      const quickDetect = new Detector(code).detect()
+if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs") {
+  await interaction.editReply({ content: `🐍 **${quickDetect.name}** detected — running specialized Python tool...` })
+  try {
+    const tempIn = path.join(__dirname, `temp_${Date.now()}.lua`)
+    fs.writeFileSync(tempIn, code)
+    const tool = quickDetect.name === "Prometheus" ? "prometheus" : "wearedevs"
+    const resultCode = await PythonBridge.run(tool, tempIn)
+    try { fs.unlinkSync(tempIn); } catch (e) {}
+    
+    const embed = new EmbedBuilder()
+      .setColor(0x00ff88)
+      .setTitle("✅ Deobfuscation Complete (Python)")
+      .setDescription(`**Tool:** ${tool} \n**Type:** ${quickDetect.name}`)
+      .addFields({ name: "📊 Result Length", value: `${resultCode.length} chars` })
+      .setTimestamp()
+    const buffer = Buffer.from(resultCode, "utf-8")
+    const attachment = new AttachmentBuilder(buffer, { name: "deobfuscated_python.lua" })
+    await interaction.editReply({ embeds: [embed], files: [attachment] })
+    return
+  } catch (error) {
+    Logger.log("ERROR", "Python tool failed", { error: error.message })
+    await interaction.editReply({ content: `⚠️ Python tool failed: \`${error.message}\`\nFalling back to JS engine...` })
+  }
+}
 
       const beautify = interaction.options.getBoolean("beautify") !== false
       const deobf = new Deobfuscator(code, { beautify })
