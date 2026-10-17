@@ -5,35 +5,53 @@ const fetch = require("node-fetch")
 const { spawn } = require("child_process")
 const path = require("path")
 const fs = require("fs")
+
 class Logger {
   static log(level, msg, data = {}) {
     const colors = { INFO: "\x1b[36m", WARN: "\x1b[33m", ERROR: "\x1b[31m", SUCCESS: "\x1b[32m", DEBUG: "\x1b[35m" }
     console.log(`${colors[level] || "\x1b[0m"}[${level}] ${msg}\x1b[0m`, data)
   }
 }
+
 class PythonBridge {
   static async run(tool, inputFile) {
     return new Promise((resolve, reject) => {
       let cmd, args;
+      
       if (tool === "prometheus") {
         cmd = "python3";
         args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
       } else if (tool === "wearedevs") {
         cmd = "python3";
         args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
+      } else if (tool === "moonsec") {
+        cmd = "dotnet";
+        args = [path.join(__dirname, "tools/MoonsecDeobfuscator/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
       } else {
         return reject(new Error("Unknown tool"));
       }
+
       const proc = spawn(cmd, args, { timeout: 120000 });
       let stdout = "";
       let stderr = "";
+
       proc.stdout.on("data", (data) => { stdout += data.toString(); });
       proc.stderr.on("data", (data) => { stderr += data.toString(); });
+
       proc.on("close", (code) => {
         if (code === 0) {
-          resolve(stdout || "Success");
+          if (tool === "moonsec") {
+            try {
+              const luacData = fs.readFileSync(inputFile + ".luac");
+              resolve("BYTECODE_HEX:" + luacData.toString("hex"));
+            } catch (e) {
+              reject(new Error("Failed to read Moonsec output"));
+            }
+          } else {
+            resolve(stdout || "Success");
+          }
         } else {
-          reject(new Error(`Python Error (${code}): ${stderr || "Unknown error"}`));
+          reject(new Error(`Tool Error (${code}): ${stderr || "Unknown error"}`));
         }
       });
     });
@@ -653,34 +671,12 @@ class Deobfuscator {
     this.opts = opts
     this.maxRecursive = opts.maxRecursive || 8
     this.stats = {
-      originalSize: code.length,
-      finalSize: 0,
-      originalLines: code.split("\n").length,
-      finalLines: 0,
-      escapesDecoded: 0,
-      base64Decoded: 0,
-      base32Decoded: 0,
-      base58Decoded: 0,
-      base91Decoded: 0,
-      hexDecoded: 0,
-      octalDecoded: 0,
-      urlDecoded: 0,
-      wearedevsDecoded: 0,
-      ascii85Decoded: 0,
-      xorDecoded: 0,
-      customB64Alphabets: 0,
-      customB64Decoded: 0,
-      stringsFound: 0,
-      stringRefsResolved: 0,
-      tablesFound: 0,
-      mathSimplified: 0,
-      antiDebugRemoved: 0,
-      recursivePasses: 0,
-      entropy: 0,
-      extractedAlphabet: false,
-      alphabetPasses: 0,
-      isNested: false,
-      layerCount: 0,
+      originalSize: code.length, finalSize: 0, originalLines: code.split("\n").length, finalLines: 0,
+      escapesDecoded: 0, base64Decoded: 0, base32Decoded: 0, base58Decoded: 0, base91Decoded: 0,
+      hexDecoded: 0, octalDecoded: 0, urlDecoded: 0, wearedevsDecoded: 0, ascii85Decoded: 0,
+      xorDecoded: 0, customB64Alphabets: 0, customB64Decoded: 0, stringsFound: 0, stringRefsResolved: 0,
+      tablesFound: 0, mathSimplified: 0, antiDebugRemoved: 0, recursivePasses: 0, entropy: 0,
+      extractedAlphabet: false, alphabetPasses: 0, isNested: false, layerCount: 0,
     }
     this.stringTableAnalyzer = new StringTableAnalyzer(code)
     this.detector = new Detector(code)
@@ -770,27 +766,18 @@ class Deobfuscator {
     this.log.push(`done: ${this.code.length} bytes`)
   }
   stripComments() {
-    this.code = this.code
-      .replace(/--\[=*\[[\s\S]*?\]=*\]/g, "")
-      .replace(/--\[\[[\s\S]*?\]\]/g, "")
-      .replace(/--[^\n\r]*/g, "")
+    this.code = this.code.replace(/--\[=*\[[\s\S]*?\]=*\]/g, "").replace(/--\[\[[\s\S]*?\]\]/g, "").replace(/--[^\n\r]*/g, "")
   }
   decodeEscapes() {
     const before = this.stats.escapesDecoded
     this.code = this.code.replace(/\\x([0-9a-fA-F]{2})/g, (m, h) => {
       const c = parseInt(h, 16)
-      if (c >= 32 && c <= 126) {
-        this.stats.escapesDecoded++
-        return String.fromCharCode(c)
-      }
+      if (c >= 32 && c <= 126) { this.stats.escapesDecoded++; return String.fromCharCode(c) }
       return m
     })
     this.code = this.code.replace(/\\(\d{1,3})/g, (m, d) => {
       const c = parseInt(d, 10)
-      if (c >= 32 && c <= 126) {
-        this.stats.escapesDecoded++
-        return String.fromCharCode(c)
-      }
+      if (c >= 32 && c <= 126) { this.stats.escapesDecoded++; return String.fromCharCode(c) }
       return m
     })
     if (this.stats.escapesDecoded > before) this.log.push(`escapes: ${this.stats.escapesDecoded - before}`)
@@ -798,10 +785,7 @@ class Deobfuscator {
   decodeUnicode() {
     this.code = this.code.replace(/\\u([0-9a-fA-F]{4})/g, (m, h) => {
       const c = parseInt(h, 16)
-      if (c >= 32 && c <= 65535) {
-        this.stats.escapesDecoded++
-        return String.fromCharCode(c)
-      }
+      if (c >= 32 && c <= 65535) { this.stats.escapesDecoded++; return String.fromCharCode(c) }
       return m
     })
   }
@@ -809,18 +793,12 @@ class Deobfuscator {
     const before = this.stats.base64Decoded
     this.code = this.code.replace(/["']([A-Za-z0-9+/]{20,}={0,2})["']/g, (m, b64) => {
       const dec = Decoders.base64(b64)
-      if (dec) {
-        this.stats.base64Decoded++
-        return JSON.stringify(dec)
-      }
+      if (dec) { this.stats.base64Decoded++; return JSON.stringify(dec) }
       return m
     })
     this.code = this.code.replace(/["']([A-Za-z0-9_-]{20,}={0,2})["']/g, (m, b64) => {
       const dec = Decoders.base64url(b64)
-      if (dec && dec.length > 4) {
-        this.stats.base64Decoded++
-        return JSON.stringify(dec)
-      }
+      if (dec && dec.length > 4) { this.stats.base64Decoded++; return JSON.stringify(dec) }
       return m
     })
     if (this.stats.base64Decoded > before) this.log.push(`base64: ${this.stats.base64Decoded - before}`)
@@ -829,10 +807,7 @@ class Deobfuscator {
     const before = this.stats.base32Decoded
     this.code = this.code.replace(/["']([A-Z2-7]{16,}=*)["']/g, (m, b32) => {
       const dec = Decoders.base32(b32)
-      if (dec) {
-        this.stats.base32Decoded++
-        return JSON.stringify(dec)
-      }
+      if (dec) { this.stats.base32Decoded++; return JSON.stringify(dec) }
       return m
     })
     if (this.stats.base32Decoded > before) this.log.push(`base32: ${this.stats.base32Decoded - before}`)
@@ -841,10 +816,7 @@ class Deobfuscator {
     const before = this.stats.base58Decoded
     this.code = this.code.replace(/["']([1-9A-HJ-NP-Za-km-z]{20,})["']/g, (m, b58) => {
       const dec = Decoders.base58(b58)
-      if (dec) {
-        this.stats.base58Decoded++
-        return JSON.stringify(dec)
-      }
+      if (dec) { this.stats.base58Decoded++; return JSON.stringify(dec) }
       return m
     })
     if (this.stats.base58Decoded > before) this.log.push(`base58: ${this.stats.base58Decoded - before}`)
@@ -854,10 +826,7 @@ class Deobfuscator {
     this.code = this.code.replace(/["']([A-Za-z0-9!#$%&()*+,.\/:;<=>?@\[\]^_`{|}~"]{20,})["']/g, (m, b91) => {
       if (/[а-яА-Я\u0600-\u06FF]/.test(b91)) return m
       const dec = Decoders.base91(b91)
-      if (dec && dec.length > 3) {
-        this.stats.base91Decoded++
-        return JSON.stringify(dec)
-      }
+      if (dec && dec.length > 3) { this.stats.base91Decoded++; return JSON.stringify(dec) }
       return m
     })
     if (this.stats.base91Decoded > before) this.log.push(`base91: ${this.stats.base91Decoded - before}`)
@@ -866,10 +835,7 @@ class Deobfuscator {
     const before = this.stats.hexDecoded
     this.code = this.code.replace(/["']([0-9a-fA-F]{12,})["']/g, (m, h) => {
       const dec = Decoders.hex(h)
-      if (dec) {
-        this.stats.hexDecoded++
-        return JSON.stringify(dec)
-      }
+      if (dec) { this.stats.hexDecoded++; return JSON.stringify(dec) }
       return m
     })
     if (this.stats.hexDecoded > before) this.log.push(`hex: ${this.stats.hexDecoded - before}`)
@@ -878,10 +844,7 @@ class Deobfuscator {
     const before = this.stats.octalDecoded
     this.code = this.code.replace(/"(\d{9,})"/g, (m, o) => {
       const dec = Decoders.octal(o)
-      if (dec) {
-        this.stats.octalDecoded++
-        return JSON.stringify(dec)
-      }
+      if (dec) { this.stats.octalDecoded++; return JSON.stringify(dec) }
       return m
     })
     if (this.stats.octalDecoded > before) this.log.push(`octal: ${this.stats.octalDecoded - before}`)
@@ -890,10 +853,7 @@ class Deobfuscator {
     const before = this.stats.urlDecoded
     this.code = this.code.replace(/["']([^"']*%[0-9a-fA-F]{2}[^"']*)["']/g, (m, s) => {
       const dec = Decoders.urlDecode(s)
-      if (dec) {
-        this.stats.urlDecoded++
-        return JSON.stringify(dec)
-      }
+      if (dec) { this.stats.urlDecoded++; return JSON.stringify(dec) }
       return m
     })
     if (this.stats.urlDecoded > before) this.log.push(`url: ${this.stats.urlDecoded - before}`)
@@ -903,10 +863,7 @@ class Deobfuscator {
     this.code = this.code.replace(/["']([!-u~]{20,})["']/g, (m, s) => {
       if (s.startsWith("^") || s.startsWith("j")) return m
       const dec = Decoders.ascii85(s)
-      if (dec) {
-        this.stats.ascii85Decoded++
-        return JSON.stringify(dec)
-      }
+      if (dec) { this.stats.ascii85Decoded++; return JSON.stringify(dec) }
       return m
     })
     if (this.stats.ascii85Decoded > before) this.log.push(`ascii85: ${this.stats.ascii85Decoded - before}`)
@@ -914,18 +871,10 @@ class Deobfuscator {
   decodeStringChar() {
     this.code = this.code.replace(/string\.char\s*\(\s*([0-9,\s+*%\-()xXa-fA-F]+)\s*\)/g, (m, args) => {
       try {
-        const nums = args
-          .split(/[,\s]+/)
-          .map(x => {
-            try { return eval(x) } catch { return NaN }
-          })
-          .filter(n => !isNaN(n) && n >= 0 && n <= 255)
+        const nums = args.split(/[,\s]+/).map(x => { try { return eval(x) } catch { return NaN } }).filter(n => !isNaN(n) && n >= 0 && n <= 255)
         if (nums.length > 0) {
           const str = String.fromCharCode(...nums)
-          if (/^[\x20-\x7E\s]*$/.test(str)) {
-            this.stats.escapesDecoded++
-            return JSON.stringify(str)
-          }
+          if (/^[\x20-\x7E\s]*$/.test(str)) { this.stats.escapesDecoded++; return JSON.stringify(str) }
         }
       } catch (e) {}
       return m
@@ -953,9 +902,7 @@ class Deobfuscator {
           }
         } catch (e) {}
       }
-      if (decoded.length > 0) {
-        this.customB64Results.push({ tableName: table.name, alphabetName: alphabets[0].name, strings: decoded })
-      }
+      if (decoded.length > 0) this.customB64Results.push({ tableName: table.name, alphabetName: alphabets[0].name, strings: decoded })
     }
     if (this.stats.customB64Decoded > 0) this.log.push(`custom b64 decoded: ${this.stats.customB64Decoded} strings`)
   }
@@ -979,11 +926,7 @@ class Deobfuscator {
         this.code = this.code.replace(re, (m, a, b) => {
           try {
             const r = fn(parseInt(a), b !== undefined ? parseInt(b) : undefined)
-            if (!isNaN(r) && Number.isFinite(r)) {
-              this.stats.mathSimplified++
-              changed = true
-              return String(r)
-            }
+            if (!isNaN(r) && Number.isFinite(r)) { this.stats.mathSimplified++; changed = true; return String(r) }
           } catch (e) {}
           return m
         })
@@ -997,10 +940,7 @@ class Deobfuscator {
       const re = new RegExp(`${table.name}\\s*\\[\\s*(\\d+)\\s*\\]`, "g")
       this.code = this.code.replace(re, (m, idx) => {
         const i = parseInt(idx) - 1
-        if (i >= 0 && i < table.strings.length) {
-          this.stats.stringRefsResolved++
-          return JSON.stringify(table.strings[i])
-        }
+        if (i >= 0 && i < table.strings.length) { this.stats.stringRefsResolved++; return JSON.stringify(table.strings[i]) }
         return m
       })
     }
@@ -1022,10 +962,7 @@ class Deobfuscator {
     for (const str of suspiciousStrings.slice(0, 5)) {
       const inner = str.slice(1, -1)
       const results = Decoders.xorBrute(inner)
-      if (results.length > 0) {
-        this.xorResults.push({ input: inner.slice(0, 40), results })
-        this.stats.xorDecoded++
-      }
+      if (results.length > 0) { this.xorResults.push({ input: inner.slice(0, 40), results }); this.stats.xorDecoded++ }
     }
     if (this.stats.xorDecoded > 0) this.log.push(`xor candidates: ${this.stats.xorDecoded}`)
   }
@@ -1056,10 +993,7 @@ class Deobfuscator {
     for (const c of this.code) freq[c] = (freq[c] || 0) + 1
     let e = 0
     const len = this.code.length
-    for (const c of Object.values(freq)) {
-      const p = c / len
-      e -= p * Math.log2(p)
-    }
+    for (const c of Object.values(freq)) { const p = c / len; e -= p * Math.log2(p) }
     this.stats.entropy = parseFloat((e / 8).toFixed(3))
     if (e / 8 > 0.7) this.warnings.push(`High entropy (${this.stats.entropy})`)
   }
@@ -1095,35 +1029,21 @@ class Deobfuscator {
   }
   buildRecommendations() {
     const recs = []
-    if (this.stats.isNested) {
-      recs.push(`This script has ${this.stats.layerCount} layers. Use /layers to unwrap step by step.`)
-    }
-    if (this.vmInfo?.isVM) {
-      recs.push(`VM structure detected (confidence ${this.vmInfo.confidence}%). Full deobfuscation requires a runtime sandbox.`)
-    }
-    if (this.antiTamper?.riskLevel === "HIGH") {
-      recs.push(`High-risk anti-tamper detected. This script will deadlock or kick in unprotected environments.`)
-    }
+    if (this.stats.isNested) recs.push(`This script has ${this.stats.layerCount} layers. Use /layers to unwrap step by step.`)
+    if (this.vmInfo?.isVM) recs.push(`VM structure detected (confidence ${this.vmInfo.confidence}%). Full deobfuscation requires a runtime sandbox.`)
+    if (this.antiTamper?.riskLevel === "HIGH") recs.push(`High-risk anti-tamper detected. This script will deadlock or kick in unprotected environments.`)
     if (this.detection.name.includes("Luraph") || this.detection.name.includes("Moonsec") || this.detection.name.includes("Luarmor")) {
       recs.push(`This obfuscator requires specialized tools (Python/C# based). JS-only deobfuscation has limits.`)
     }
-    if (this.stats.wearedevsDecoded > 0) {
-      recs.push(`WeAreDevs strings decoded. Bytecode layer requires a runtime to fully unwrap.`)
-    }
-    if (this.detection.name === "Clean") {
-      recs.push(`No obfuscation detected. Script is clean.`)
-    }
-    if (recs.length === 0) {
-      recs.push(`Try /deobf_file with a fresh sample, or use /detect to verify the type.`)
-    }
+    if (this.stats.wearedevsDecoded > 0) recs.push(`WeAreDevs strings decoded. Bytecode layer requires a runtime to fully unwrap.`)
+    if (this.detection.name === "Clean") recs.push(`No obfuscation detected. Script is clean.`)
+    if (recs.length === 0) recs.push(`Try /deobf_file with a fresh sample, or use /detect to verify the type.`)
     return recs
   }
 }
 
 async function fetchCodeFromUrl(url) {
-  const fixed = url
-    .replace(/github\.com\/([^\/]+)\/([^\/]+)\/blob\//, "raw.githubusercontent.com/$1/$2/")
-    .replace(/pastebin\.com\/(?!raw\/)([A-Za-z0-9]+)/, "pastebin.com/raw/$1")
+  const fixed = url.replace(/github\.com\/([^\/]+)\/([^\/]+)\/blob\//, "raw.githubusercontent.com/$1/$2/").replace(/pastebin\.com\/(?!raw\/)([A-Za-z0-9]+)/, "pastebin.com/raw/$1")
   const response = await fetch(fixed, { headers: { "User-Agent": "Mozilla/5.0" } })
   if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`)
   return await response.text()
@@ -1140,18 +1060,14 @@ async function readAttachment(attachment) {
 
 function buildReport(result) {
   let r = "═══════════════════════════════════════════════\n"
-  r += "         DEOBFUSCATION REPORT (V7)\n"
+  r += "         DEOBFUSCATION REPORT (V8)\n"
   r += "═══════════════════════════════════════════════\n\n"
   r += "🎯 DETECTION\n"
   r += `   Type: ${result.detection.name}\n`
   r += `   Confidence: ${result.detection.confidence}%\n`
   r += `   Nested: ${result.stats.isNested ? "YES (" + result.stats.layerCount + " layers)" : "NO"}\n`
-  if (result.detection.signals.length > 0) {
-    r += `   Signals: ${result.detection.signals.slice(0, 5).join(", ")}\n`
-  }
-  if (result.detection.generic.length > 0) {
-    r += `   Generic: ${result.detection.generic.join(", ")}\n`
-  }
+  if (result.detection.signals.length > 0) r += `   Signals: ${result.detection.signals.slice(0, 5).join(", ")}\n`
+  if (result.detection.generic.length > 0) r += `   Generic: ${result.detection.generic.join(", ")}\n`
   r += "\n"
   if (result.vmInfo) {
     r += "🖥️ VM ANALYSIS\n"
@@ -1171,9 +1087,7 @@ function buildReport(result) {
     r += "🛡️ ANTI-TAMPER ANALYSIS\n"
     r += `   Risk Level: ${result.antiTamper.riskLevel}\n`
     r += `   Total Patterns: ${result.antiTamper.count}\n`
-    for (const p of result.antiTamper.patterns) {
-      r += `   [${p.severity.toUpperCase()}] ${p.name} x${p.count}\n`
-    }
+    for (const p of result.antiTamper.patterns) r += `   [${p.severity.toUpperCase()}] ${p.name} x${p.count}\n`
     r += "\n"
   }
   if (result.layers.length > 0) {
@@ -1218,9 +1132,7 @@ function buildReport(result) {
   }
   if (result.stringTableAnalyzer && result.stringTableAnalyzer.tables.length > 0) {
     r += "📚 STRING TABLES\n"
-    for (const t of result.stringTableAnalyzer.tables.slice(0, 10)) {
-      r += `   ${t.name}: ${t.strings.length} strings\n`
-    }
+    for (const t of result.stringTableAnalyzer.tables.slice(0, 10)) r += `   ${t.name}: ${t.strings.length} strings\n`
     r += "\n"
   }
   if (result.wearedevsSamples.length > 0) {
@@ -1245,9 +1157,7 @@ function buildReport(result) {
   if (result.xorResults.length > 0) {
     r += "🧮 XOR BRUTE FORCE\n"
     for (const x of result.xorResults) {
-      for (const r2 of x.results.slice(0, 2)) {
-        r += `   [${r2.key}] ${JSON.stringify(r2.sample.slice(0, 80))}\n`
-      }
+      for (const r2 of x.results.slice(0, 2)) r += `   [${r2.key}] ${JSON.stringify(r2.sample.slice(0, 80))}\n`
     }
     r += "\n"
   }
@@ -1284,47 +1194,13 @@ function buildReport(result) {
 const client = new Client({ intents: [GatewayIntentBits.Guilds] })
 
 const commands = [
-  new SlashCommandBuilder()
-    .setName("deobf")
-    .setDescription("Deobfuscate Lua code from a string")
-    .addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(true))
-    .addBooleanOption(o => o.setName("beautify").setDescription("Format the output (default: true)"))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("deobf_url")
-    .setDescription("Deobfuscate Lua code from a URL")
-    .addStringOption(o => o.setName("url").setDescription("URL to the obfuscated code").setRequired(true))
-    .addBooleanOption(o => o.setName("beautify").setDescription("Format the output (default: true)"))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("deobf_file")
-    .setDescription("Deobfuscate Lua code from an uploaded file")
-    .addAttachmentOption(o => o.setName("file").setDescription("File (.lua/.txt/.luau/.luac)").setRequired(true))
-    .addBooleanOption(o => o.setName("beautify").setDescription("Format the output (default: true)"))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("detect")
-    .setDescription("Detect obfuscator type (no deobfuscation)")
-    .addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(false))
-    .addStringOption(o => o.setName("url").setDescription("Or a URL to the code").setRequired(false))
-    .addAttachmentOption(o => o.setName("file").setDescription("Or a file").setRequired(false))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("layers")
-    .setDescription("Analyze nested obfuscation layers (onion)")
-    .addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(true))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("vmdetect")
-    .setDescription("Analyze VM structure of an obfuscated script")
-    .addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(false))
-    .addStringOption(o => o.setName("url").setDescription("Or a URL to the code").setRequired(false))
-    .addAttachmentOption(o => o.setName("file").setDescription("Or a file").setRequired(false))
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("help")
-    .setDescription("Show available commands")
-    .toJSON(),
+  new SlashCommandBuilder().setName("deobf").setDescription("Deobfuscate Lua code from a string").addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(true)).addBooleanOption(o => o.setName("beautify").setDescription("Format the output (default: true)")).toJSON(),
+  new SlashCommandBuilder().setName("deobf_url").setDescription("Deobfuscate Lua code from a URL").addStringOption(o => o.setName("url").setDescription("URL to the obfuscated code").setRequired(true)).addBooleanOption(o => o.setName("beautify").setDescription("Format the output (default: true)")).toJSON(),
+  new SlashCommandBuilder().setName("deobf_file").setDescription("Deobfuscate Lua code from an uploaded file").addAttachmentOption(o => o.setName("file").setDescription("File (.lua/.txt/.luau/.luac)").setRequired(true)).addBooleanOption(o => o.setName("beautify").setDescription("Format the output (default: true)")).toJSON(),
+  new SlashCommandBuilder().setName("detect").setDescription("Detect obfuscator type (no deobfuscation)").addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(false)).addStringOption(o => o.setName("url").setDescription("Or a URL to the code").setRequired(false)).addAttachmentOption(o => o.setName("file").setDescription("Or a file").setRequired(false)).toJSON(),
+  new SlashCommandBuilder().setName("layers").setDescription("Analyze nested obfuscation layers (onion)").addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(true)).toJSON(),
+  new SlashCommandBuilder().setName("vmdetect").setDescription("Analyze VM structure of an obfuscated script").addStringOption(o => o.setName("code").setDescription("The obfuscated Lua code").setRequired(false)).addStringOption(o => o.setName("url").setDescription("Or a URL to the code").setRequired(false)).addAttachmentOption(o => o.setName("file").setDescription("Or a file").setRequired(false)).toJSON(),
+  new SlashCommandBuilder().setName("help").setDescription("Show available commands").toJSON(),
 ].map(c => c)
 
 async function registerCommands() {
@@ -1364,8 +1240,8 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "help") {
     const embed = new EmbedBuilder()
       .setColor(0x00aaff)
-      .setTitle("📖 Deobfuscator Bot V7")
-      .setDescription("Advanced Lua deobfuscation with VM analysis, anti-tamper detection, and nested-layer support")
+      .setTitle("📖 Deobfuscator Bot V8")
+      .setDescription("Advanced Lua deobfuscation with VM analysis, anti-tamper detection, nested-layers, and Python/C# tool bridges.")
       .addFields(
         { name: "/deobf code:<code>", value: "Deobfuscate code directly" },
         { name: "/deobf_url url:<link>", value: "Deobfuscate from URL (Pastebin/GitHub/Gist)" },
@@ -1374,9 +1250,9 @@ client.on("interactionCreate", async (interaction) => {
         { name: "/layers code:<code>", value: "Analyze nested obfuscation (onion)" },
         { name: "/vmdetect", value: "Analyze VM structure + anti-tamper patterns" },
         { name: "/help", value: "Show this message" },
-        { name: "✨ V7 Features", value: "• VM structure analyzer\n• Anti-tamper detector\n• Nested layer (onion) analysis\n• WeAreDevs multi-alphabet\n• Smart recommendations\n• 18+ obfuscator detection\n• 16+ encodings decoded" }
+        { name: "✨ V8 Features", value: "• Python Integration (Prometheus, WeAreDevs)\n• C# Bridge Ready (Moonsec)\n• VM structure analyzer\n• Anti-tamper detector\n• Nested layer (onion) analysis\n• Smart recommendations\n• 18+ obfuscator detection\n• 16+ encodings decoded" }
       )
-      .setFooter({ text: "V7 • Advanced" })
+      .setFooter({ text: "V8 • Advanced" })
     await interaction.reply({ embeds: [embed] })
     return
   }
@@ -1410,9 +1286,7 @@ client.on("interactionCreate", async (interaction) => {
       if (vm.hasFuncFactory) structure.push("• Function factory pattern")
       if (vm.hasTableWrap) structure.push("• Table wrapper [80]")
       if (vm.hasGoto) structure.push("• Goto/Labels")
-      if (structure.length > 0) {
-        embed.addFields({ name: "🔍 Detected Constructs", value: structure.join("\n").slice(0, 1000) })
-      }
+      if (structure.length > 0) embed.addFields({ name: "🔍 Detected Constructs", value: structure.join("\n").slice(0, 1000) })
       const counts = []
       if (vm.registerCount > 0) counts.push(`Registers: ${vm.registerCount}`)
       if (vm.hexKeyCount > 0) counts.push(`Hex Keys: ${vm.hexKeyCount}`)
@@ -1421,16 +1295,14 @@ client.on("interactionCreate", async (interaction) => {
       if (vm.stringByteCount > 0) counts.push(`string.byte: ${vm.stringByteCount}`)
       if (vm.stringSubCount > 0) counts.push(`string.sub: ${vm.stringSubCount}`)
       if (vm.tableConcatCount > 0) counts.push(`table.concat: ${vm.tableConcatCount}`)
-      if (counts.length > 0) {
-        embed.addFields({ name: "📊 Counts", value: counts.join(" • ").slice(0, 1000) })
-      }
+      if (counts.length > 0) embed.addFields({ name: "📊 Counts", value: counts.join(" • ").slice(0, 1000) })
       if (at.count > 0) {
         const atText = at.patterns.map(p => `[${p.severity.toUpperCase()}] ${p.name} × ${p.count}`).join("\n")
         embed.addFields({ name: `🛡️ Anti-Tamper (Risk: ${at.riskLevel})`, value: atText.slice(0, 1000) })
       } else {
         embed.addFields({ name: "🛡️ Anti-Tamper", value: "No patterns detected ✅" })
       }
-      embed.setTimestamp().setFooter({ text: "V7 VM Analyzer" })
+      embed.setTimestamp().setFooter({ text: "V8 VM Analyzer" })
       await interaction.editReply({ embeds: [embed] })
     } catch (error) {
       await interaction.editReply({ content: `❌ Error: ${error.message}` })
@@ -1461,17 +1333,13 @@ client.on("interactionCreate", async (interaction) => {
           { name: "🧅 Nested Layers", value: layerAnalysis.layers.length > 1 ? `**YES** (${layerAnalysis.layers.length} layers)` : "No", inline: true },
           { name: "🖥️ VM", value: vm.isVM ? `**YES** (${vm.confidence}%)` : "No", inline: true },
         )
-      if (detection.signals.length > 0) {
-        embed.addFields({ name: "🔖 Matched Signatures", value: detection.signals.slice(0, 8).map(s => `• ${s}`).join("\n").slice(0, 1000) })
-      }
-      if (detection.generic.length > 0) {
-        embed.addFields({ name: "🧩 Generic Signals", value: detection.generic.map(s => `• ${s}`).join("\n").slice(0, 1000) })
-      }
+      if (detection.signals.length > 0) embed.addFields({ name: "🔖 Matched Signatures", value: detection.signals.slice(0, 8).map(s => `• ${s}`).join("\n").slice(0, 1000) })
+      if (detection.generic.length > 0) embed.addFields({ name: "🧩 Generic Signals", value: detection.generic.map(s => `• ${s}`).join("\n").slice(0, 1000) })
       if (layerAnalysis.layers.length > 1) {
         const layerText = layerAnalysis.layers.map(l => `**Layer ${l.depth}:** ${l.name} (${l.confidence}%) — ${l.lines} lines`).join("\n")
         embed.addFields({ name: "🧅 Onion Layers", value: layerText.slice(0, 1000) })
       }
-      embed.setTimestamp().setFooter({ text: "V7 Detection Engine" })
+      embed.setTimestamp().setFooter({ text: "V8 Detection Engine" })
       await interaction.editReply({ embeds: [embed] })
     } catch (error) {
       await interaction.editReply({ content: `❌ Error: ${error.message}` })
@@ -1505,7 +1373,7 @@ client.on("interactionCreate", async (interaction) => {
       }
       const buffer = Buffer.from(analysis.final, "utf-8")
       const attachment = new AttachmentBuilder(buffer, { name: "unwrapped.lua" })
-      embed.setTimestamp().setFooter({ text: "V7 Onion Engine" })
+      embed.setTimestamp().setFooter({ text: "V8 Onion Engine" })
       await interaction.editReply({ embeds: [embed], files: [attachment] })
     } catch (error) {
       await interaction.editReply({ content: `❌ Error: ${error.message}` })
@@ -1520,31 +1388,32 @@ client.on("interactionCreate", async (interaction) => {
       const { code, source } = await resolveCode(interaction)
       if (!code || code.trim().length === 0) throw new Error("No code found")
       if (code.length > 500000) throw new Error("Code too large (max 500KB)")
+
       const quickDetect = new Detector(code).detect()
-if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs") {
-  await interaction.editReply({ content: `🐍 **${quickDetect.name}** detected — running specialized Python tool...` })
-  try {
-    const tempIn = path.join(__dirname, `temp_${Date.now()}.lua`)
-    fs.writeFileSync(tempIn, code)
-    const tool = quickDetect.name === "Prometheus" ? "prometheus" : "wearedevs"
-    const resultCode = await PythonBridge.run(tool, tempIn)
-    try { fs.unlinkSync(tempIn); } catch (e) {}
-    
-    const embed = new EmbedBuilder()
-      .setColor(0x00ff88)
-      .setTitle("✅ Deobfuscation Complete (Python)")
-      .setDescription(`**Tool:** ${tool} \n**Type:** ${quickDetect.name}`)
-      .addFields({ name: "📊 Result Length", value: `${resultCode.length} chars` })
-      .setTimestamp()
-    const buffer = Buffer.from(resultCode, "utf-8")
-    const attachment = new AttachmentBuilder(buffer, { name: "deobfuscated_python.lua" })
-    await interaction.editReply({ embeds: [embed], files: [attachment] })
-    return
-  } catch (error) {
-    Logger.log("ERROR", "Python tool failed", { error: error.message })
-    await interaction.editReply({ content: `⚠️ Python tool failed: \`${error.message}\`\nFalling back to JS engine...` })
-  }
-}
+      if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs") {
+        await interaction.editReply({ content: `🐍 **${quickDetect.name}** detected — running specialized Python tool...` })
+        try {
+          const tempIn = path.join(__dirname, `temp_${Date.now()}.lua`)
+          fs.writeFileSync(tempIn, code)
+          const tool = quickDetect.name === "Prometheus" ? "prometheus" : "wearedevs"
+          const resultCode = await PythonBridge.run(tool, tempIn)
+          try { fs.unlinkSync(tempIn); } catch (e) {}
+          
+          const embed = new EmbedBuilder()
+            .setColor(0x00ff88)
+            .setTitle("✅ Deobfuscation Complete (Python)")
+            .setDescription(`**Tool:** ${tool} \n**Type:** ${quickDetect.name}`)
+            .addFields({ name: "📊 Result Length", value: `${resultCode.length} chars` })
+            .setTimestamp()
+          const buffer = Buffer.from(resultCode, "utf-8")
+          const attachment = new AttachmentBuilder(buffer, { name: "deobfuscated_python.lua" })
+          await interaction.editReply({ embeds: [embed], files: [attachment] })
+          return
+        } catch (error) {
+          Logger.log("ERROR", "Python tool failed", { error: error.message })
+          await interaction.editReply({ content: `⚠️ Python tool failed: \`${error.message}\`\nFalling back to JS engine...` })
+        }
+      }
 
       const beautify = interaction.options.getBoolean("beautify") !== false
       const deobf = new Deobfuscator(code, { beautify })
@@ -1555,7 +1424,7 @@ if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs") {
 
       const embed = new EmbedBuilder()
         .setColor(deobf.stats.isNested ? 0x9933ff : 0x00ff88)
-        .setTitle("🚀 Deobfuscation Complete (V7)")
+        .setTitle("🚀 Deobfuscation Complete (V8)")
         .setDescription(`**Source:** ${source}`)
         .addFields(
           { name: "🎯 Type", value: deobf.detection.name, inline: true },
@@ -1585,25 +1454,17 @@ if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs") {
       if (deobf.stats.antiDebugRemoved > 0) decoders.push(`AntiDebug: ${deobf.stats.antiDebugRemoved}`)
       if (deobf.stats.xorDecoded > 0) decoders.push(`XOR: ${deobf.stats.xorDecoded}`)
       if (deobf.stats.extractedAlphabet) decoders.push(`Alphabet: extracted`)
-      if (decoders.length > 0) {
-        embed.addFields({ name: "🔓 Decoded", value: decoders.join(" • ").slice(0, 1000) })
-      }
+      if (decoders.length > 0) embed.addFields({ name: "🔓 Decoded", value: decoders.join(" • ").slice(0, 1000) })
       if (deobf.stats.isNested && deobf.layers.length > 0) {
         const layerText = deobf.layers.map(l => `L${l.depth}: ${l.name} (${l.confidence}%)`).join(" → ")
         embed.addFields({ name: "🧅 Layer Chain", value: layerText.slice(0, 1000) })
       }
       const recs = deobf.buildRecommendations()
-      if (recs.length > 0) {
-        embed.addFields({ name: "💡 Recommendations", value: recs.slice(0, 5).map(r => `• ${r}`).join("\n").slice(0, 1000) })
-      }
-      if (deobf.webhooks.length > 0) {
-        embed.addFields({ name: "⚠️ Webhooks", value: deobf.webhooks.slice(0, 3).map(w => `\`${w.slice(0, 80)}\``).join("\n").slice(0, 1000) })
-      }
-      if (deobf.keys.length > 0) {
-        embed.addFields({ name: "🔑 Possible Keys", value: deobf.keys.slice(0, 5).map(k => `\`${k}\``).join("\n").slice(0, 1000) })
-      }
+      if (recs.length > 0) embed.addFields({ name: "💡 Recommendations", value: recs.slice(0, 5).map(r => `• ${r}`).join("\n").slice(0, 1000) })
+      if (deobf.webhooks.length > 0) embed.addFields({ name: "⚠️ Webhooks", value: deobf.webhooks.slice(0, 3).map(w => `\`${w.slice(0, 80)}\``).join("\n").slice(0, 1000) })
+      if (deobf.keys.length > 0) embed.addFields({ name: "🔑 Possible Keys", value: deobf.keys.slice(0, 5).map(k => `\`${k}\``).join("\n").slice(0, 1000) })
       embed.addFields({ name: "📈 Entropy", value: `${deobf.stats.entropy}`, inline: true })
-      embed.setTimestamp().setFooter({ text: "V7 • Advanced Deobfuscation" })
+      embed.setTimestamp().setFooter({ text: "V8 • Advanced Deobfuscation" })
 
       const report = buildReport(deobf)
       const buffer = Buffer.from(report, "utf-8")
@@ -1612,11 +1473,7 @@ if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs") {
       await interaction.editReply({ embeds: [embed], files: [attachment] })
     } catch (error) {
       Logger.log("ERROR", "Deobfuscation failed", { error: error.message })
-      const embed = new EmbedBuilder()
-        .setColor(0xff0000)
-        .setTitle("❌ Deobfuscation Failed")
-        .setDescription(`**Error:** ${error.message}`)
-        .setTimestamp()
+      const embed = new EmbedBuilder().setColor(0xff0000).setTitle("❌ Deobfuscation Failed").setDescription(`**Error:** ${error.message}`).setTimestamp()
       await interaction.editReply({ embeds: [embed] })
     }
     return
@@ -1635,7 +1492,7 @@ if (!process.env.CLIENT_ID) {
   process.exit(1)
 }
 
-Logger.log("INFO", "Starting bot V7...")
+Logger.log("INFO", "Starting bot V8...")
 client.login(process.env.DISCORD_TOKEN).catch((error) => {
   Logger.log("ERROR", "Login failed", { error: error.message })
   process.exit(1)
