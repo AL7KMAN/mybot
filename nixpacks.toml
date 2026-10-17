@@ -1,8 +1,11 @@
 [phases.setup]
-nixPkgs = ["nodejs_18", "python311", "python311Packages.pip"]
+nixPkgs = ["nodejs_18", "python311", "python311Packages.pip", "git"]
 
 [phases.install]
 cmds = [
   "npm install",
-  "pip install -r requirements.txt"
+  "pip install -r requirements.txt",
+  "mkdir -p tools",
+  "git clone https://github.com/0x251/Prometheus-Deobfuscator.git tools/prometheus",
+  "git clone https://github.com/hutaoshusband/Prometheus-WeAre-Devs-Dumper.git tools/wearedevs"
 ]
