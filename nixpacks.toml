@@ -1,5 +1,5 @@
 [phases.setup]
-nixPkgs = ["nodejs_18", "python312", "dotnet-sdk", "git"]
+nixPkgs = ["nodejs_18", "python312", "dotnet-sdk_9", "git"]
 
 [phases.install]
 cmds = [
