@@ -1,10 +1,10 @@
 [phases.setup]
-nixPkgs = ["nodejs_18", "python311", "git"]
+nixPkgs = ["nodejs_18", "python312", "git"]
 
 [phases.install]
 cmds = [
   "npm install",
-  "python3.11 -m venv /opt/venv",
+  "python3.12 -m venv /opt/venv",
   "/opt/venv/bin/pip install -r requirements.txt",
   "mkdir -p tools",
   "git clone https://github.com/0x251/Prometheus-Deobfuscator.git tools/prometheus",
