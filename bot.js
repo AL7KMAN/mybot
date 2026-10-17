@@ -1394,7 +1394,9 @@ if (quickDetect.name === "Prometheus" || quickDetect.name === "WeAreDevs" || qui
   try {
     const tempIn = path.join(__dirname, `temp_${Date.now()}.lua`)
     fs.writeFileSync(tempIn, code)
-    const tool = quickDetect.name === "Prometheus" ? "prometheus" : quickDetect.name === "WeAreDevs" ? "wearedevs" : "moonsec"
+    let tool = "moonsec";
+if (quickDetect.name === "Prometheus") tool = "prometheus";
+else if (quickDetect.name === "WeAreDevs") tool = "wearedevs";
     const resultCode = await PythonBridge.run(tool, tempIn)
     try { fs.unlinkSync(tempIn); } catch (e) {}
     
