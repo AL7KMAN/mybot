@@ -1131,11 +1131,132 @@ class Deobfuscator {
   }
 }
 
+// ==========================================
+// SMART FETCHER (Einstein Level)
+// ==========================================
 async function fetchCodeFromUrl(url) {
-  const fixed = url.replace(/github\.com\/([^\/]+)\/([^\/]+)\/blob\//, "raw.githubusercontent.com/$1/$2/").replace(/pastebin\.com\/(?!raw\/)([A-Za-z0-9]+)/, "pastebin.com/raw/$1");
-  const response = await fetch(fixed, { headers: { "User-Agent": "Mozilla/5.0" } });
-  if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-  return await response.text();
+  const userAgents = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Mobile Safari/537.36",
+    "Roblox/WinInetRobloxApp/0.673.0.6730711 (GlobalDist; RobloxDirectDownload)",
+    "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; AS; rv:11.0) like Gecko",
+    "Mozilla/5.0 (PlayStation; PlayStation 5/2.26) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0 Safari/605.1.15",
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Mozilla/5.0 (compatible; Bingbot/2.0; +http://www.bing.com/bingbot.htm)"
+  ];
+
+  const headersList = [
+    { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" },
+    { "Accept": "application/json, text/plain, */*" },
+    { "Accept": "*/*", "Referer": "https://www.google.com/" },
+    { "Accept": "text/html", "Referer": "https://www.youtube.com/" },
+    { "Accept": "*/*", "Cache-Control": "no-cache", "Pragma": "no-cache" }
+  ];
+
+  let fixedUrl = url;
+  if (fixedUrl.includes("github.com") && fixedUrl.includes("/blob/")) {
+    fixedUrl = fixedUrl.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
+  }
+  if (fixedUrl.includes("pastebin.com") && !fixedUrl.includes("/raw/")) {
+    fixedUrl = fixedUrl.replace("pastebin.com/", "pastebin.com/raw/");
+  }
+
+  let lastError = null;
+
+  // Einstein Loop: 3 Waves of 20 Attempts (Total 60)
+  for (let wave = 1; wave <= 3; wave++) {
+    for (let attempt = 1; attempt <= 20; attempt++) {
+      const ua = userAgents[(attempt + wave) % userAgents.length];
+      const headers = { 
+        ...headersList[(attempt + wave) % headersList.length], 
+        "User-Agent": ua,
+        "Accept-Language": "en-US,en;q=0.5",
+        "Connection": "keep-alive"
+      };
+
+      try {
+        const response = await fetch(fixedUrl, {
+          headers: headers,
+          redirect: "follow",
+          timeout: 15000,
+          compress: true
+        });
+
+        if (!response.ok) {
+          lastError = `HTTP ${response.status}: ${response.statusText}`;
+          continue;
+        }
+
+        const text = await response.text();
+        const trimmed = text.trim();
+
+        // 1. Direct Lua Script
+        if (!trimmed.startsWith("<!DOCTYPE") && !trimmed.startsWith("<html") && !trimmed.startsWith("<") && trimmed.length > 10) {
+          return trimmed;
+        }
+
+        // 2. Aggressive HTML Parsing
+        const scriptPatterns = [
+          /loadstring\s*\(\s*["']([^"']+)["']\s*\)/g,
+          /loadstring\s*\(\s*game:HttpGet\s*\(\s*["']([^"']+)["']\s*\)\s*\)/g,
+          /game:HttpGet\s*\(\s*["']([^"']+)["']\s*\)/g,
+          /HttpGet\s*\(\s*["']([^"']+)["']\s*\)/g,
+          /<script[^>]*>([\s\S]*?)<\/script>/gi,
+          /<textarea[^>]*>([\s\S]*?)<\/textarea>/gi,
+          /<pre[^>]*>([\s\S]*?)<\/pre>/gi,
+          /<code[^>]*>([\s\S]*?)<\/code>/gi
+        ];
+
+        for (const pattern of scriptPatterns) {
+          const matches = [...text.matchAll(pattern)];
+          for (const match of matches) {
+            let candidate = match[1] || "";
+            candidate = candidate.trim();
+            if (candidate.length > 10 && /[a-zA-Z_]\w*\s*[=({]/.test(candidate) && !candidate.startsWith("<")) {
+              return candidate;
+            }
+          }
+        }
+
+        // 3. Follow Hidden Links
+        const linkPatterns = [
+          /["'](https?:\/\/[^"']+\.(?:lua|txt|raw)[^"']*)["']/gi,
+          /href=["'](https?:\/\/[^"']+)["']/gi
+        ];
+        for (const pattern of linkPatterns) {
+          const matches = [...text.matchAll(pattern)];
+          for (const match of matches) {
+            const link = match[1];
+            if (link && !link.includes("encrypt-x") && !link.includes("facebook") && !link.includes("twitter") && !link.includes("google")) {
+              try {
+                const subResponse = await fetch(link, { headers: headers, timeout: 10000 });
+                const subText = await subResponse.text();
+                if (!subText.trim().startsWith("<") && subText.length > 10 && /[a-zA-Z_]\w*\s*[=({]/.test(subText)) {
+                  return subText;
+                }
+              } catch (e) {}
+            }
+          }
+        }
+
+        lastError = "HTML page returned, no raw script found inside.";
+      } catch (err) {
+        lastError = err.message;
+      }
+
+      // Delay between attempts to avoid rate limiting
+      await new Promise(r => setTimeout(r, 100));
+    }
+    
+    // Change strategy for the next wave by tweaking URL parameters if needed
+    if (wave === 1) fixedUrl += (fixedUrl.includes("?") ? "&" : "?") + "bypass=" + Date.now();
+    if (wave === 2) fixedUrl += "&nocache=" + Math.random();
+  }
+
+  throw new Error(`Smart Fetcher failed after 60 attempts (3 waves). Last error: ${lastError}`);
 }
 
 async function readAttachment(attachment) {
@@ -1158,7 +1279,7 @@ function buildReport(result) {
   if (result.detection.signals.length > 0) r += `   Signals: ${result.detection.signals.slice(0, 5).join(", ")}\n`;
   if (result.detection.generic.length > 0) r += `   Generic: ${result.detection.generic.join(", ")}\n`;
   r += "\n";
-  
+
   if (result.vmInfo) {
     r += "🖥️ VM ANALYSIS\n";
     r += `   Is VM: ${result.vmInfo.isVM ? "YES ✅" : "No"}\n`;
@@ -1173,7 +1294,7 @@ function buildReport(result) {
     r += `   Function Factory: ${result.vmInfo.hasFuncFactory ? "Yes" : "No"}\n`;
     r += "\n";
   }
-  
+
   if (result.antiTamper) {
     r += "🛡️ ANTI-TAMPER ANALYSIS\n";
     r += `   Risk Level: ${result.antiTamper.riskLevel}\n`;
@@ -1181,7 +1302,7 @@ function buildReport(result) {
     for (const p of result.antiTamper.patterns) r += `   [${p.severity.toUpperCase()}] ${p.name} x${p.count}\n`;
     r += "\n";
   }
-  
+
   if (result.layers.length > 0) {
     r += "🧅 LAYER ANALYSIS (ONION)\n";
     for (const layer of result.layers) {
@@ -1190,7 +1311,7 @@ function buildReport(result) {
     }
     r += "\n";
   }
-  
+
   r += "📊 STATISTICS\n";
   r += `   Original: ${result.stats.originalSize} bytes (${result.stats.originalLines} lines)\n`;
   r += `   Final:    ${result.stats.finalSize} bytes (${result.stats.finalLines} lines)\n`;
@@ -1198,7 +1319,7 @@ function buildReport(result) {
   r += `   Reduced:  ${ratio}%\n`;
   r += `   Entropy:  ${result.stats.entropy}\n`;
   r += "\n";
-  
+
   r += "🔓 DECODING RESULTS\n";
   r += `   Aggressive Strings: ${result.stats.stringsDecoded}\n`;
   r += `   Deep Passes:        ${result.stats.loops}\n`;
@@ -1212,20 +1333,20 @@ function buildReport(result) {
   if (result.stats.xorDecoded > 0) r += `   XOR candidates:     ${result.stats.xorDecoded}\n`;
   if (result.stats.extractedAlphabet) r += `   Alphabet: EXTRACTED (85 chars)\n`;
   r += "\n";
-  
+
   const recs = result.buildRecommendations();
   if (recs.length > 0) {
     r += "💡 RECOMMENDATIONS\n";
     for (const rec of recs) r += `   • ${rec}\n`;
     r += "\n";
   }
-  
+
   if (result.stringTableAnalyzer && result.stringTableAnalyzer.tables.length > 0) {
     r += "📚 STRING TABLES\n";
     for (const t of result.stringTableAnalyzer.tables.slice(0, 10)) r += `   ${t.name}: ${t.strings.length} strings\n`;
     r += "\n";
   }
-  
+
   if (result.xorResults.length > 0) {
     r += "🧮 XOR BRUTE FORCE\n";
     for (const x of result.xorResults) {
@@ -1233,35 +1354,35 @@ function buildReport(result) {
     }
     r += "\n";
   }
-  
+
   if (result.urls.length > 0) {
     r += "🌐 URLS FOUND\n";
     for (const u of result.urls.slice(0, 10)) r += `   ${u}\n`;
     r += "\n";
   }
-  
+
   if (result.webhooks.length > 0) {
     r += "⚠️ WEBHOOKS FOUND\n";
     for (const w of result.webhooks) r += `   ${w}\n`;
     r += "\n";
   }
-  
+
   if (result.keys.length > 0) {
     r += "🔑 KEYS FOUND\n";
     for (const k of result.keys.slice(0, 10)) r += `   ${k}\n`;
     r += "\n";
   }
-  
+
   if (result.warnings.length > 0) {
     r += "⚠️ WARNINGS\n";
     for (const w of result.warnings) r += `   ${w}\n`;
     r += "\n";
   }
-  
+
   r += "📝 PROCESSING LOG\n";
   for (const l of result.log) r += `   > ${l}\n`;
   r += "\n";
-  
+
   r += "═══════════════════════════════════════════════\n";
   r += "               DEOBFUSCATED CODE\n";
   r += "═══════════════════════════════════════════════\n\n";
