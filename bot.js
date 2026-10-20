@@ -733,15 +733,59 @@ class MathOBFEvaluator {
           continue;
         }
 
-        const expr = this._extractExpression(code, i);
-        if (expr && /[+\-*/%^]/.test(expr.text)) {
-          const value = this._safeEval(expr.text);
-          if (value !== null) {
-            replacements.push({ from: expr.text, to: String(value) });
-            result += String(value);
-            i = expr.end;
+        let j = i;
+        let depth = 0;
+        let hasOperator = false;
+        let lastWasNumber = false;
+        
+        while (j < n) {
+          const c = code[j];
+          if (c === "(") { depth++; j++; lastWasNumber = false; continue; }
+          if (c === ")") { 
+            if (depth === 0) break; 
+            depth--; j++; lastWasNumber = false; continue; 
+          }
+          if (/[\+\-\*\/\%\^]/.test(c)) {
+            const prevNonSpace = code.slice(0, j).match(/\S(?=\s*$)/);
+            const p = prevNonSpace ? prevNonSpace[0] : "";
+            if (c === "-" && (p === "" || /[\+\-\*\/\%\^\(]/.test(p))) {
+              j++;
+              lastWasNumber = false;
+              continue;
+            }
+            hasOperator = true;
+            j++;
+            lastWasNumber = false;
             continue;
           }
+          if (/\s/.test(c)) { j++; continue; }
+          if (/[0-9]/.test(c)) {
+            const numMatch = code.slice(j).match(/^\d+\.?\d*/);
+            if (numMatch) {
+              j += numMatch[0].length;
+              lastWasNumber = true;
+              continue;
+            }
+          }
+          break;
+        }
+
+        if (hasOperator) {
+          const text = code.slice(i, j).trim();
+          const val = this._safeEval(text);
+          if (val !== null) {
+            result += String(val);
+            replacements.push({ from: text, to: String(val) });
+            i = j;
+            continue;
+          }
+        }
+        
+        const numMatch = code.slice(i).match(/^\d+\.?\d*/);
+        if (numMatch) {
+          result += numMatch[0];
+          i += numMatch[0].length;
+          continue;
         }
       }
 
@@ -752,47 +796,39 @@ class MathOBFEvaluator {
     return { code: result, replacements, count: replacements.length };
   }
 
-  static _extractExpression(code, start) {
-    let i = start;
-    let depth = 0;
-    while (i < code.length) {
-      const ch = code[i];
-      if (/\s/.test(ch)) { i++; continue; }
-      if (ch === "(") { depth++; i++; continue; }
-      if (ch === ")") { if (depth === 0) break; depth--; i++; continue; }
-      if (["+", "-", "*", "/", "%", "^"].includes(ch)) { i++; continue; }
-      const numMatch = code.slice(i).match(/^0x[0-9a-fA-F]+|^0b[01]+|^\d+\.?\d*/);
-      if (numMatch) { i += numMatch[0].length; continue; }
-      break;
-    }
-    if (i > start) {
-      const text = code.slice(start, i).trim();
-      if (text.length === 0) return null;
-      return { text, end: i };
-    }
-    return null;
-  }
-
   static _safeEval(expr) {
-    const tokens = expr.match(/0x[0-9a-fA-F]+|0b[01]+|\d+\.?\d*|[+\-*/%^()]/g);
-    if (!tokens || tokens.length === 0) return null;
+    const clean = expr.replace(/\s+/g, "");
+    if (!clean) return null;
+    const tokens = clean.match(/\d+\.?\d*|[\+\-\*\/\%\^\(\)]/g);
+    if (!tokens) return null;
     let pos = 0;
     const peek = () => tokens[pos];
     const consume = () => tokens[pos++];
+
     const parseFactor = () => {
-      if (peek() === "-") { consume(); return -parseFactor(); }
-      if (peek() === "+") { consume(); return parseFactor(); }
-      if (peek() === "(") { consume(); const v = parseExpr(); if (peek() === ")") consume(); return v; }
+      let sign = 1;
+      while (peek() === "-" || peek() === "+") {
+        if (consume() === "-") sign *= -1;
+      }
+      if (peek() === "(") {
+        consume();
+        const val = parseExpr();
+        if (peek() === ")") consume();
+        return sign * val;
+      }
       const tok = consume();
-      if (tok.startsWith("0x")) return parseInt(tok, 16);
-      if (tok.startsWith("0b")) return parseInt(tok.slice(2), 2);
-      return parseFloat(tok);
+      return sign * parseFloat(tok);
     };
+
     const parsePower = () => {
-      const base = parseFactor();
-      if (peek() === "^") { consume(); return Math.pow(base, parsePower()); }
+      let base = parseFactor();
+      while (peek() === "^") {
+        consume();
+        base = Math.pow(base, parseFactor());
+      }
       return base;
     };
+
     const parseTerm = () => {
       let left = parsePower();
       while (peek() === "*" || peek() === "/" || peek() === "%") {
@@ -804,6 +840,7 @@ class MathOBFEvaluator {
       }
       return left;
     };
+
     const parseExpr = () => {
       let left = parseTerm();
       while (peek() === "+" || peek() === "-") {
@@ -813,10 +850,12 @@ class MathOBFEvaluator {
       }
       return left;
     };
+
     try {
       const result = parseExpr();
       if (pos !== tokens.length) return null;
       if (!isFinite(result)) return null;
+      if (result % 1 !== 0 && Math.abs(result) < 1e-10) return 0;
       return result;
     } catch (e) {
       return null;
@@ -1143,11 +1182,9 @@ class Deobfuscator {
             { re: /bit32\.rshift\s*\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/g, fn: (a, b) => a >> b },
             { re: /bit32\.bnot\s*\(\s*(-?\d+)\s*\)/g, fn: (a) => ~a },
             { re: /math\.floor\s*\(\s*(-?\d+)\s*\/\s*(-?\d+)\s*\)/g, fn: (a, b) => Math.floor(a / b) },
-            { re: /math\.ceil\s*\(\s*(-?\d+)\s*\/\s*(-?\d+)\s*\)/g, fn: (a, b) => Math.ceil(a / b) },
-            { re: /\((\d+)\s*\+\s*(\d+)\)/g, fn: (a, b) => a + b },
-            { re: /\((\d+)\s*-\s*(\d+)\)/g, fn: (a, b) => a - b },
-            { re: /(\d+)\s*\*\s*(\d+)/g, fn: (a, b) => a * b },
+            { re: /math\.ceil\s*\(\s*(-?\d+)\s*\/\s*(-?\d+)\s*\)/g, fn: (a, b) => Math.ceil(a / b) }
         ];
+
         for (let pass = 0; pass < 12; pass++) {
             let changed = false;
             for (const { re, fn } of ops) {
