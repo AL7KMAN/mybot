@@ -99,6 +99,10 @@ class LuaSandbox {
         const lua = await factory.createEngine();
         const logs = [];
         try {
+            const processedCode = code.replace(/0b([01]+)/g, (match, bin) => {
+                return parseInt(bin, 2).toString();
+            });
+
             lua.global.set('game', {
                 GetService: (name) => { logs.push(`[GETSERVICE] ${name}`); return { LocalPlayer: { Name: "SandboxPlayer", Character: {} } }; },
                 HttpGet: (url) => { logs.push(`[HTTPGET] ${url}`); return "-- sandbox block"; },
@@ -109,7 +113,8 @@ class LuaSandbox {
             lua.global.set('print', (...args) => { logs.push(`[PRINT] ${args.join(' ')}`); });
             lua.global.set('warn', (...args) => { logs.push(`[WARN] ${args.join(' ')}`); });
             lua.global.set('task', { wait: () => {}, spawn: (f) => f() });
-            const execute = lua.doString(code);
+            
+            const execute = lua.doString(processedCode);
             const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Sandbox execution timed out (Infinite Loop Detected)")), 5000));
             await Promise.race([execute, timeout]);
             return logs.join('\n');
@@ -119,6 +124,7 @@ class LuaSandbox {
             lua.global.close();
         }
     }
+                               }
 }
 
 class Base85 {
