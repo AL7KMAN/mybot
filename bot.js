@@ -673,6 +673,157 @@ class Detector {
     }
 }
 
+class MathOBFEvaluator {
+  static evaluate(code) {
+    const replacements = [];
+    let result = "";
+    let i = 0;
+    const n = code.length;
+
+    while (i < n) {
+      const ch = code[i];
+
+      if (ch === '"' || ch === "'") {
+        const quote = ch;
+        let str = quote;
+        i++;
+        while (i < n) {
+          if (code[i] === "\\" && i + 1 < n) {
+            str += code[i] + code[i + 1];
+            i += 2;
+          } else if (code[i] === quote) {
+            str += quote;
+            i++;
+            break;
+          } else {
+            str += code[i];
+            i++;
+          }
+        }
+        result += str;
+        continue;
+      }
+
+      if (ch === "[" && code[i + 1] === "[" && code[i + 2] === "[") {
+        const close = code.indexOf("]]]", i + 3);
+        if (close !== -1) {
+          result += code.slice(i, close + 3);
+          i = close + 3;
+          continue;
+        }
+      }
+
+      if (ch === "-" && code[i + 1] === "-") {
+        const nl = code.indexOf("\n", i);
+        if (nl === -1) {
+          result += code.slice(i);
+          i = n;
+        } else {
+          result += code.slice(i, nl);
+          i = nl;
+        }
+        continue;
+      }
+
+      if (/[0-9]/.test(ch)) {
+        const prev = i > 0 ? code[i - 1] : "";
+        if (/[A-Za-z0-9_]/.test(prev) || prev === ".") {
+          result += ch;
+          i++;
+          continue;
+        }
+
+        const expr = this._extractExpression(code, i);
+        if (expr && /[+\-*/%^]/.test(expr.text)) {
+          const value = this._safeEval(expr.text);
+          if (value !== null) {
+            replacements.push({ from: expr.text, to: String(value) });
+            result += String(value);
+            i = expr.end;
+            continue;
+          }
+        }
+      }
+
+      result += ch;
+      i++;
+    }
+
+    return { code: result, replacements, count: replacements.length };
+  }
+
+  static _extractExpression(code, start) {
+    let i = start;
+    let depth = 0;
+    while (i < code.length) {
+      const ch = code[i];
+      if (/\s/.test(ch)) { i++; continue; }
+      if (ch === "(") { depth++; i++; continue; }
+      if (ch === ")") { if (depth === 0) break; depth--; i++; continue; }
+      if (["+", "-", "*", "/", "%", "^"].includes(ch)) { i++; continue; }
+      const numMatch = code.slice(i).match(/^0x[0-9a-fA-F]+|^0b[01]+|^\d+\.?\d*/);
+      if (numMatch) { i += numMatch[0].length; continue; }
+      break;
+    }
+    if (i > start) {
+      const text = code.slice(start, i).trim();
+      if (text.length === 0) return null;
+      return { text, end: i };
+    }
+    return null;
+  }
+
+  static _safeEval(expr) {
+    const tokens = expr.match(/0x[0-9a-fA-F]+|0b[01]+|\d+\.?\d*|[+\-*/%^()]/g);
+    if (!tokens || tokens.length === 0) return null;
+    let pos = 0;
+    const peek = () => tokens[pos];
+    const consume = () => tokens[pos++];
+    const parseFactor = () => {
+      if (peek() === "-") { consume(); return -parseFactor(); }
+      if (peek() === "+") { consume(); return parseFactor(); }
+      if (peek() === "(") { consume(); const v = parseExpr(); if (peek() === ")") consume(); return v; }
+      const tok = consume();
+      if (tok.startsWith("0x")) return parseInt(tok, 16);
+      if (tok.startsWith("0b")) return parseInt(tok.slice(2), 2);
+      return parseFloat(tok);
+    };
+    const parsePower = () => {
+      const base = parseFactor();
+      if (peek() === "^") { consume(); return Math.pow(base, parsePower()); }
+      return base;
+    };
+    const parseTerm = () => {
+      let left = parsePower();
+      while (peek() === "*" || peek() === "/" || peek() === "%") {
+        const op = consume();
+        const right = parsePower();
+        if (op === "*") left *= right;
+        else if (op === "/") left /= right;
+        else left %= right;
+      }
+      return left;
+    };
+    const parseExpr = () => {
+      let left = parseTerm();
+      while (peek() === "+" || peek() === "-") {
+        const op = consume();
+        const right = parseTerm();
+        left = op === "+" ? left + right : left - right;
+      }
+      return left;
+    };
+    try {
+      const result = parseExpr();
+      if (pos !== tokens.length) return null;
+      if (!isFinite(result)) return null;
+      return result;
+    } catch (e) {
+      return null;
+    }
+  }
+}
+
 class Deobfuscator {
     constructor(code, opts = {}) {
         this.original = code;
@@ -978,6 +1129,12 @@ class Deobfuscator {
     }
 
     simplifyMath() {
+        const mathRes = MathOBFEvaluator.evaluate(this.code);
+        if (mathRes.count > 0) {
+            this.code = mathRes.code;
+            this.stats.mathSimplified += mathRes.count;
+        }
+
         const ops = [
             { re: /bit32\.bxor\s*\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/g, fn: (a, b) => a ^ b },
             { re: /bit32\.band\s*\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/g, fn: (a, b) => a & b },
