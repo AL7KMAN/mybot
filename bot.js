@@ -14,40 +14,6 @@ class Logger {
     }
 }
 
-class ExternalTools {
-    static async runDisrobe(inputFile, outputDir) {
-        return new Promise((resolve, reject) => {
-            const proc = spawn('/app/disrobe', ['auto', inputFile, '--out', outputDir], { timeout: 120000 });
-            let stdout = "";
-            let stderr = "";
-            proc.stdout.on("data", (data) => { stdout += data.toString(); });
-            proc.stderr.on("data", (data) => { stderr += data.toString(); });
-            proc.on("close", (code) => {
-                if (code === 0) resolve(stdout || "Success");
-                else reject(new Error(`Disrobe Error (${code}): ${stderr.slice(0, 1500)}`));
-            });
-        });
-    }
-
-    static async runUnluac(inputFile, outputFile) {
-        return new Promise((resolve, reject) => {
-            const proc = spawn('java', ['-jar', '/app/unluac.jar', inputFile], { timeout: 60000 });
-            let stdout = "";
-            let stderr = "";
-            proc.stdout.on("data", (data) => { stdout += data.toString(); });
-            proc.stderr.on("data", (data) => { stderr += data.toString(); });
-            proc.on("close", (code) => {
-                if (code === 0) {
-                    fs.writeFileSync(outputFile, stdout);
-                    resolve(stdout);
-                } else {
-                    reject(new Error(`Unluac Error (${code}): ${stderr.slice(0, 1500)}`));
-                }
-            });
-        });
-    }
-}
-
 class PythonBridge {
     static stripAnsi(str) {
         return str.replace(/\x1b\[[0-9;]*m/g, '').replace(/\[\d+m/g, '');
@@ -113,7 +79,7 @@ class LuaSandbox {
             lua.global.set('print', (...args) => { logs.push(`[PRINT] ${args.join(' ')}`); });
             lua.global.set('warn', (...args) => { logs.push(`[WARN] ${args.join(' ')}`); });
             lua.global.set('task', { wait: () => {}, spawn: (f) => f() });
-            
+
             const execute = lua.doString(processedCode);
             const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Sandbox execution timed out (Infinite Loop Detected)")), 5000));
             await Promise.race([execute, timeout]);
@@ -124,41 +90,63 @@ class LuaSandbox {
             lua.global.close();
         }
     }
-                               }
 }
 
 class Base85 {
-    static buildLookup(alphabet) { const l = {}; for (let i = 0; i < alphabet.length; i++) l[alphabet[i]] = i; return l; }
+    static buildLookup(alphabet) {
+        const l = {};
+        for (let i = 0; i < alphabet.length; i++) l[alphabet[i]] = i;
+        return l;
+    }
     static decode(str, alphabet) {
         if (!str || !alphabet || alphabet.length !== 85) return null;
-        const lookup = Base85.buildLookup(alphabet); const out = []; let i = 0;
+        const lookup = Base85.buildLookup(alphabet);
+        const out = [];
+        let i = 0;
         while (i < str.length) {
-            const remaining = str.length - i; let chunk = str.slice(i, i + Math.min(5, remaining)); const origLen = chunk.length;
+            const remaining = str.length - i;
+            let chunk = str.slice(i, i + Math.min(5, remaining));
+            const origLen = chunk.length;
             while (chunk.length < 5) chunk += alphabet[84];
-            let v = 0n; let valid = true;
-            for (const c of chunk) { if (lookup[c] === undefined) { valid = false; break; } v = v * 85n + BigInt(lookup[c]); }
+            let v = 0n;
+            let valid = true;
+            for (const c of chunk) {
+                if (lookup[c] === undefined) { valid = false; break; }
+                v = v * 85n + BigInt(lookup[c]);
+            }
             if (!valid) { i += 1; continue; }
             const bytes = [Number((v >> 24n) & 0xFFn), Number((v >> 16n) & 0xFFn), Number((v >> 8n) & 0xFFn), Number(v & 0xFFn)];
-            const count = origLen - 1; for (let k = 0; k < count; k++) out.push(bytes[k]); i += origLen;
+            const count = origLen - 1;
+            for (let k = 0; k < count; k++) out.push(bytes[k]);
+            i += origLen;
         }
         return Buffer.from(out).toString("utf-8");
     }
     static extractAlphabet(code) {
         const tableMatches = code.match(/local\s+\w+\s*=\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g) || [];
         for (const tm of tableMatches) {
-            const entries = {}; const re = /(?:\[["']([^"']+)["']\]|([A-Za-z_]\w*))\s*=\s*(\d+)/g; let m;
+            const entries = {};
+            const re = /(?:\[["']([^"']+)["']\]|([A-Za-z_]\w*))\s*=\s*(\d+)/g;
+            let m;
             while ((m = re.exec(tm)) !== null) {
-                const key = m[1] !== undefined ? m[1] : m[2]; const val = parseInt(m[3]);
+                const key = m[1] !== undefined ? m[1] : m[2];
+                const val = parseInt(m[3]);
                 if (val >= 0 && val < 85) entries[val] = key;
             }
             const keys = Object.keys(entries);
             if (keys.length >= 80 && keys.length <= 90) {
-                const alpha = []; let ok = true;
+                const alpha = [];
+                let ok = true;
                 for (let i = 0; i < 85; i++) {
                     if (entries[i] === undefined) { ok = false; break; }
                     let ch = entries[i];
-                    if (ch.startsWith("\\x")) { const hm = ch.match(/^\\x([0-9a-fA-F]{2})/); if (hm) ch = String.fromCharCode(parseInt(hm[1], 16)); }
-                    else if (ch.startsWith("\\")) { const dm = ch.match(/^\\(\d{1,3})/); if (dm) ch = String.fromCharCode(parseInt(dm[1], 10)); }
+                    if (ch.startsWith("\\x")) {
+                        const hm = ch.match(/^\\x([0-9a-fA-F]{2})/);
+                        if (hm) ch = String.fromCharCode(parseInt(hm[1], 16));
+                    } else if (ch.startsWith("\\")) {
+                        const dm = ch.match(/^\\(\d{1,3})/);
+                        if (dm) ch = String.fromCharCode(parseInt(dm[1], 10));
+                    }
                     if (ch.length !== 1) { ok = false; break; }
                     alpha.push(ch);
                 }
@@ -187,23 +175,34 @@ class CustomBase64 {
         return null;
     }
     static extractAlphabets(code) {
-        const alphabets = []; const tableRe = /(?:local\s+)?(\w+)\s*=\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g; let tableMatch;
+        const alphabets = [];
+        const tableRe = /(?:local\s+)?(\w+)\s*=\s*\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}/g;
+        let tableMatch;
         while ((tableMatch = tableRe.exec(code)) !== null) {
-            const [, name, body] = tableMatch; const entries = {};
-            const entryRe = /(?:\[["']([^"']+)["']\]|\[(\d+)\]|([A-Za-z_]\w*))\s*=\s*([^,}\n]+)/g; let entryMatch;
+            const [, name, body] = tableMatch;
+            const entries = {};
+            const entryRe = /(?:\[["']([^"']+)["']\]|\[(\d+)\]|([A-Za-z_]\w*))\s*=\s*([^,}\n]+)/g;
+            let entryMatch;
             while ((entryMatch = entryRe.exec(body)) !== null) {
                 const key = entryMatch[1] !== undefined ? entryMatch[1] : entryMatch[2] !== undefined ? entryMatch[2] : entryMatch[3];
-                const valStr = entryMatch[4].trim(); const val = this.parseValue(valStr);
+                const valStr = entryMatch[4].trim();
+                const val = this.parseValue(valStr);
                 if (val !== null && val >= 0 && val <= 63 && key && key.length === 1) entries[val] = key;
             }
             const keys = Object.keys(entries);
             if (keys.length >= 60 && keys.length <= 68) {
-                const alphabet = []; let ok = true;
+                const alphabet = [];
+                let ok = true;
                 for (let i = 0; i < 64; i++) {
                     if (entries[i] === undefined) { ok = false; break; }
                     let ch = entries[i];
-                    if (ch.startsWith("\\x")) { const hm = ch.match(/^\\x([0-9a-fA-F]{2})/); if (hm) ch = String.fromCharCode(parseInt(hm[1], 16)); }
-                    else if (ch.startsWith("\\")) { const dm = ch.match(/^\\(\d{1,3})/); if (dm) ch = String.fromCharCode(parseInt(dm[1], 10)); }
+                    if (ch.startsWith("\\x")) {
+                        const hm = ch.match(/^\\x([0-9a-fA-F]{2})/);
+                        if (hm) ch = String.fromCharCode(parseInt(hm[1], 16));
+                    } else if (ch.startsWith("\\")) {
+                        const dm = ch.match(/^\\(\d{1,3})/);
+                        if (dm) ch = String.fromCharCode(parseInt(dm[1], 10));
+                    }
                     if (ch.length !== 1) { ok = false; break; }
                     alphabet.push(ch);
                 }
@@ -214,25 +213,41 @@ class CustomBase64 {
     }
     static decode(str, alphabet) {
         if (!str || !alphabet || alphabet.length !== 64) return null;
-        const lookup = {}; for (let i = 0; i < 64; i++) lookup[alphabet[i]] = i;
-        const out = []; let i = 0;
+        const lookup = {};
+        for (let i = 0; i < 64; i++) lookup[alphabet[i]] = i;
+        const out = [];
+        let i = 0;
         while (i < str.length) {
-            const chunk = str.slice(i, i + 4); const origLen = chunk.length; if (origLen === 0) break;
-            let clean = chunk; let padding = 0;
+            const chunk = str.slice(i, i + 4);
+            const origLen = chunk.length;
+            if (origLen === 0) break;
+            let clean = chunk;
+            let padding = 0;
             while (clean.endsWith("=")) { clean = clean.slice(0, -1); padding++; }
             while (clean.length < 4) clean += alphabet[0];
-            let v = 0n; let valid = true;
-            for (const c of clean) { if (lookup[c] === undefined) { valid = false; break; } v = v * 64n + BigInt(lookup[c]); }
+            let v = 0n;
+            let valid = true;
+            for (const c of clean) {
+                if (lookup[c] === undefined) { valid = false; break; }
+                v = v * 64n + BigInt(lookup[c]);
+            }
             if (!valid) { i += origLen; continue; }
             const bytes = [Number((v >> 16n) & 0xFFn), Number((v >> 8n) & 0xFFn), Number(v & 0xFFn)];
-            const outCount = 3 - padding; for (let k = 0; k < outCount; k++) out.push(bytes[k]); i += origLen;
+            const outCount = 3 - padding;
+            for (let k = 0; k < outCount; k++) out.push(bytes[k]);
+            i += origLen;
         }
         return Buffer.from(out);
     }
     static findStringTables(code) {
-        const tables = []; const re = /(?:local\s+)?(\w+)\s*=\s*\{([\s\S]*?)\}/g; let m;
+        const tables = [];
+        const re = /(?:local\s+)?(\w+)\s*=\s*\{([\s\S]*?)\}/g;
+        let m;
         while ((m = re.exec(code)) !== null) {
-            const [, name, body] = m; const strs = []; const strRe = /"((?:[^"\\]|\\.)*)"/g; let sm;
+            const [, name, body] = m;
+            const strs = [];
+            const strRe = /"((?:[^"\\]|\\.)*)"/g;
+            let sm;
             while ((sm = strRe.exec(body)) !== null) strs.push(sm[1]);
             if (strs.length >= 5 && strs.length < 5000) {
                 const allB64 = strs.every(s => /^[A-Za-z0-9+/]+=*$/.test(s) || s === "");
@@ -242,8 +257,12 @@ class CustomBase64 {
         return tables;
     }
     static bytesToString(bytes) {
-        const str = bytes.toString("utf-8"); let printable = 0;
-        for (const c of str) { const code = c.charCodeAt(0); if (code >= 32 && code <= 126) printable++; }
+        const str = bytes.toString("utf-8");
+        let printable = 0;
+        for (const c of str) {
+            const code = c.charCodeAt(0);
+            if (code >= 32 && code <= 126) printable++;
+        }
         if (str.length > 0 && printable / str.length > 0.7) return { type: "text", value: str };
         return { type: "hex", value: bytes.toString("hex") };
     }
@@ -417,14 +436,23 @@ class Decoders {
 }
 
 class StringTableAnalyzer {
-    constructor(code) { this.code = code; this.tables = []; this.totalStrings = 0; }
+    constructor(code) {
+        this.code = code;
+        this.tables = [];
+        this.totalStrings = 0;
+    }
     findTables() {
         const patterns = [/local\s+(\w+)\s*=\s*\{([\s\S]*?)\}/g, /(\w+)\s*=\s*\{([\s\S]*?)\}/g];
         for (const re of patterns) {
             let m;
             while ((m = re.exec(this.code)) !== null) {
-                const name = m[1]; const body = m[2]; const strings = this.extractStrings(body);
-                if (strings.length >= 3) { this.tables.push({ name, strings, size: strings.length }); this.totalStrings += strings.length; }
+                const name = m[1];
+                const body = m[2];
+                const strings = this.extractStrings(body);
+                if (strings.length >= 3) {
+                    this.tables.push({ name, strings, size: strings.length });
+                    this.totalStrings += strings.length;
+                }
             }
         }
         const seen = new Set();
@@ -437,7 +465,9 @@ class StringTableAnalyzer {
         return this.tables;
     }
     extractStrings(body) {
-        const out = []; const re = /["']((?:\\.|[^"'\\])*)["']/g; let m;
+        const out = [];
+        const re = /["']((?:\\.|[^"'\\])*)["']/g;
+        let m;
         while ((m = re.exec(body)) !== null) out.push(this.unescape(m[1]));
         return out;
     }
