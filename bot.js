@@ -69,16 +69,35 @@ class LuaSandbox {
                 return parseInt(bin, 2).toString();
             });
 
-            lua.global.set('game', {
-                GetService: (name) => { logs.push(`[GETSERVICE] ${name}`); return { LocalPlayer: { Name: "SandboxPlayer", Character: {} } }; },
-                HttpGet: (url) => { logs.push(`[HTTPGET] ${url}`); return "-- sandbox block"; },
-                IsLoaded: () => true
-            });
-            lua.global.set('Instance', { new: (type) => { logs.push(`[INSTANCE] ${type}`); return { Name: "SandboxObj", ClassName: type }; } });
-            lua.global.set('loadstring', (src) => { logs.push(`[LOADSTRING] ${src.slice(0, 200)}...`); return () => {}; });
-            lua.global.set('print', (...args) => { logs.push(`[PRINT] ${args.join(' ')}`); });
-            lua.global.set('warn', (...args) => { logs.push(`[WARN] ${args.join(' ')}`); });
-            lua.global.set('task', { wait: () => {}, spawn: (f) => f() });
+            const fakeEnv = {
+                game: {
+                    GetService: (name) => { logs.push(`[GETSERVICE] ${name}`); return { LocalPlayer: { Name: "SandboxPlayer", Character: {} } }; },
+                    HttpGet: (url) => { logs.push(`[HTTPGET] ${url}`); return "-- sandbox block"; },
+                    IsLoaded: () => true
+                },
+                Instance: { new: (type) => { logs.push(`[INSTANCE] ${type}`); return { Name: "SandboxObj", ClassName: type }; } },
+                loadstring: (src) => { logs.push(`[LOADSTRING] ${src.slice(0, 200)}...`); return () => {}; },
+                print: (...args) => { logs.push(`[PRINT] ${args.join(' ')}`); },
+                warn: (...args) => { logs.push(`[WARN] ${args.join(' ')}`); },
+                task: { wait: () => {}, spawn: (f) => f() },
+                getfenv: () => fakeEnv,
+                setfenv: (f, env) => f,
+                newproxy: () => ({}),
+                setmetatable: (t, mt) => t,
+                getmetatable: (t) => null,
+                rawget: (t, k) => t ? t[k] : null,
+                rawset: (t, k, v) => { if (t) t[k] = v; return t; },
+                unpack: (t) => Object.values(t || {}),
+                typeof: (v) => typeof v,
+                wait: () => {},
+                tick: () => Date.now(),
+                workspace: {},
+                script: {}
+            };
+
+            for (const [key, val] of Object.entries(fakeEnv)) {
+                lua.global.set(key, val);
+            }
 
             const execute = lua.doString(processedCode);
             const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Sandbox execution timed out (Infinite Loop Detected)")), 5000));
