@@ -122,7 +122,10 @@ class WeAreDevs {
     static ALPHA_V1 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!#$%&()*+-;<=>?@^_`{|}~";
     static replaceAll(code, alphabet, prefix) {
         let count = 0;
-        const regex = new RegExp(`(["'])${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([A-Za-z0-9\\!\\#\\$\\%\\&\\(\\)\\*\\+\\,\\-\\.\\/\\:\\;\\<\\=\\>\\?\\@\\[\\]\\^\\_\\`\\{\\|\\}\\~]+)\\1`, 'g');
+        const safePrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const reStr = "([\"'])" + safePrefix + "([A-Za-z0-9!#$%&()*+,\\-.\\/:;<=>?@\\[\\]^_`{|}~]+)\\1";
+        const regex = new RegExp(reStr, "g");
+        
         const newCode = code.replace(regex, (match, quote, b85) => {
             const dec = Base85.decode(b85, alphabet);
             if (dec && Decoders.isPrintable(dec)) {
