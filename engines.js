@@ -54,6 +54,23 @@ class PythonBridge {
             });
         });
     }
+
+    static async runUnluac(luacPath) {
+        return new Promise((resolve, reject) => {
+            const proc = spawn("java", ["-jar", path.join(__dirname, "unluac.jar"), luacPath], { timeout: 60000 });
+            let stdout = "";
+            let stderr = "";
+            proc.stdout.on("data", (data) => { stdout += data.toString(); });
+            proc.stderr.on("data", (data) => { stderr += data.toString(); });
+            proc.on("close", (code) => {
+                if (code === 0) {
+                    resolve(stdout);
+                } else {
+                    reject(new Error(`unluac Error: ${stderr}`));
+                }
+            });
+        });
+    }
 }
 
 class LuaSandbox {
@@ -106,7 +123,7 @@ class LuaSandbox {
             for (const [key, val] of Object.entries(fakeEnv)) { try { lua.global.set(key, val); } catch(e) {} }
             
             const execute = lua.doString(processedCode);
-            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Sandbox execution timed out (Infinite Loop)")), 4000));
+            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Sandbox execution timed out")), 4000));
             await Promise.race([execute, timeout]);
             
             return logs.length > 0 ? logs.join('\n') : "Sandbox executed successfully, but no logs were captured.";
@@ -1058,11 +1075,23 @@ class Deobfuscator {
     }
 
     decodeUnicode() {
+        const before = this.stats.escapesDecoded;
+        this.code = this.code.replace(/\\u\{([0-9a-fA-F]{1,8})\}/g, (m, h) => {
+            try {
+                const c = parseInt(h, 16);
+                if (c > 0 && c <= 0x10FFFF) {
+                    this.stats.escapesDecoded++;
+                    return String.fromCodePoint(c);
+                }
+            } catch (e) {}
+            return m;
+        });
         this.code = this.code.replace(/\\u([0-9a-fA-F]{4})/g, (m, h) => {
             const c = parseInt(h, 16);
             if (c >= 32 && c <= 65535) { this.stats.escapesDecoded++; return String.fromCharCode(c); }
             return m;
         });
+        if (this.stats.escapesDecoded > before) this.log.push(`unicode: ${this.stats.escapesDecoded - before}`);
     }
 
     decodeBase64Layer() {
