@@ -16,6 +16,9 @@ const {
     buildReport
 } = require('./engines.js');
 
+const TOKEN = 'MTU2MDU0NDcxNjkwNTI1MDg1Ng.GoIxPo.8ExoHSErpuhAb3-K5nff_tGf8v0v1oeQZswaHA';
+const CLIENT_ID = '1560544716905250856';
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 const commands = [
@@ -29,14 +32,10 @@ const commands = [
 ].map(c => c);
 
 async function registerCommands() {
-    if (!process.env.DISCORD_TOKEN || !process.env.CLIENT_ID) {
-        Logger.log("ERROR", "Missing DISCORD_TOKEN or CLIENT_ID");
-        return;
-    }
-    const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
+    const rest = new REST({ version: "10" }).setToken(TOKEN);
     try {
         Logger.log("INFO", "Registering slash commands...");
-        await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
+        await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
         Logger.log("SUCCESS", "Slash commands registered");
     } catch (error) {
         Logger.log("ERROR", "Failed to register commands", { error: error.message });
@@ -292,11 +291,8 @@ client.on("interactionCreate", async (interaction) => {
 client.on("error", (error) => Logger.log("ERROR", "Client error", { error: error.message }));
 process.on("unhandledRejection", (error) => Logger.log("ERROR", "Unhandled rejection", { error: error?.message || error }));
 
-if (!process.env.DISCORD_TOKEN) { process.exit(1); }
-if (!process.env.CLIENT_ID) { process.exit(1); }
-
 Logger.log("INFO", "Starting bot V4 God-Mode...");
-client.login(process.env.DISCORD_TOKEN).catch((error) => {
+client.login(TOKEN).catch((error) => {
     Logger.log("ERROR", "Login failed", { error: error.message });
     process.exit(1);
 });
