@@ -10,7 +10,6 @@ const {
     LuaSandbox,
     Detector,
     VMAnalyzer,
-    AntiTamperDetector,
     Deobfuscator,
     fetchCodeFromUrl,
     readAttachment,
@@ -67,18 +66,15 @@ client.on("interactionCreate", async (interaction) => {
         const embed = new EmbedBuilder()
             .setColor(0x00aaff)
             .setTitle("📖 God-Mode Deobfuscator V4")
-            .setDescription("Advanced Lua deobfuscation with aggressive string decoding, deep recursion, VM analysis, anti-tamper detection, and Python/C# tool bridges.")
+            .setDescription("Advanced Lua deobfuscation engine. Just send me a URL or a File and I'll send you the deobfuscated code directly.")
             .addFields(
-                { name: "/deobf code:<code>", value: "Deobfuscate code directly" },
-                { name: "/deobf_url url:<link>", value: "Deobfuscate from URL (Pastebin/GitHub/Gist)" },
+                { name: "/deobf_url url:<link>", value: "Deobfuscate from URL" },
                 { name: "/deobf_file file:<file>", value: "Deobfuscate from uploaded file" },
-                { name: "/detect", value: "Detect obfuscator type + line count + nested layers" },
-                { name: "/layers code:<code>", value: "Analyze nested obfuscation (onion)" },
-                { name: "/vmdetect", value: "Analyze VM structure + anti-tamper patterns" },
-                { name: "/help", value: "Show this message" },
-                { name: "✨ V4 Features", value: "• Aggressive string decoding (Any length)\n• 50x Deep recursion\n• Prometheus, WeAreDevs & Moonsec Integration\n• Lua Sandbox (wasmoon) for VM\n• VM structure analyzer\n• Anti-tamper detector\n• Nested layer (onion) analysis\n• 18+ obfuscator detection" }
-            )
-            .setFooter({ text: "V4 • Aggressive Mode" });
+                { name: "/deobf code:<code>", value: "Deobfuscate code directly" },
+                { name: "/detect", value: "Detect obfuscator type" },
+                { name: "/layers", value: "Analyze nested obfuscation" },
+                { name: "/vmdetect", value: "Analyze VM structure" }
+            );
         await interaction.reply({ embeds: [embed] });
         return;
     }
@@ -218,46 +214,58 @@ client.on("interactionCreate", async (interaction) => {
             const quickDetect = new Detector(code).detect();
             const vmInfo = VMAnalyzer.analyze(code);
 
-            if (quickDetect.name === "MoonVeil" || vmInfo.isVM || code.includes("MoonVeil")) {
-                await interaction.editReply({ content: `⏳ **VM Detected** (${quickDetect.name}). Running inside Lua Sandbox to extract logic...` });
-                const sandboxLogs = await LuaSandbox.run(code);
-                const embed = new EmbedBuilder()
-                    .setColor(0x9933ff)
-                    .setTitle("🖥️ Sandbox Extraction")
-                    .setDescription(`**Logs captured:**\n\`\`\`\n${sandboxLogs.slice(0, 3500)}\n\`\`\``);
-                await interaction.editReply({ embeds: [embed], files: [new AttachmentBuilder(Buffer.from(sandboxLogs), { name: "sandbox_logs.txt" })] });
-                return;
-            }
+            let toolUsed = null;
+            if (quickDetect.name === "WeAreDevs" || code.includes("wearedevs.net/obfuscator")) toolUsed = "wearedevs";
+            else if (quickDetect.name === "Moonsec V3" || quickDetect.name === "Moonsec V2" || code.includes("MoonSec")) toolUsed = "moonsec";
+            else if (quickDetect.name === "Prometheus" || code.includes("Prometheus")) toolUsed = "prometheus";
 
-            if (code.includes("wearedevs.net/obfuscator") || code.includes("This file was protected with MoonSec V3") || code.includes("Prometheus") || code.includes("return(function(...)local L={")) {
-                await interaction.editReply({ content: `🐍 Specialized Obfuscator detected — running external tool...` });
+            if (toolUsed) {
+                await interaction.editReply({ content: `🎯 **تم التعرف على التشفير:** ${quickDetect.name}\n⏳ جاري تشغيل أداة **${toolUsed}** لفك التشفير بالكامل...` });
                 try {
                     const tempIn = path.join(__dirname, `temp_${Date.now()}.lua`);
                     fs.writeFileSync(tempIn, code);
-                    let tool = "moonsec";
-                    if (code.includes("Prometheus")) tool = "prometheus";
-                    else if (code.includes("wearedevs")) tool = "wearedevs";
                     
-                    const resultCode = await PythonBridge.run(tool, tempIn);
+                    let resultCode = await PythonBridge.run(toolUsed, tempIn);
                     try { fs.unlinkSync(tempIn); } catch (e) {}
                     
-                    const embed = new EmbedBuilder()
-                        .setColor(0x00ff88)
-                        .setTitle("✅ Deobfuscation Complete")
-                        .setDescription(`**Tool:** ${tool}`);
                     let finalBuffer = Buffer.from(resultCode, "utf-8");
-                    let finalName = "deobfuscated_python.lua";
+                    let finalName = `deobfuscated_${toolUsed}.lua`;
+                    
                     if (resultCode.startsWith("BYTECODE_HEX:")) {
-                        finalBuffer = Buffer.from(resultCode.replace("BYTECODE_HEX:", ""), "hex");
-                        finalName = "deobfuscated_bytecode.luac";
+                        const luacBuffer = Buffer.from(resultCode.replace("BYTECODE_HEX:", ""), "hex");
+                        const luacPath = path.join(__dirname, `temp_${Date.now()}.luac`);
+                        fs.writeFileSync(luacPath, luacBuffer);
+                        
+                        try {
+                            const unluacCode = await PythonBridge.runUnluac(luacPath);
+                            finalBuffer = Buffer.from(unluacCode, "utf-8");
+                            finalName = `deobfuscated_${toolUsed}_source.lua`;
+                            await interaction.editReply({ content: `✅ **تم فك التشفير بنجاح!**\n🎯 النوع: ${quickDetect.name}\n🔓 الأداة: ${toolUsed} + unluac` });
+                        } catch (e) {
+                            Logger.log("WARN", "unluac failed, sending raw bytecode", { error: e.message });
+                            finalBuffer = luacBuffer;
+                            finalName = `deobfuscated_${toolUsed}.luac`;
+                            await interaction.editReply({ content: `✅ **تم استخراج الـ Bytecode بنجاح!** (تعذر تحويله لكود لوا)` });
+                        }
+                        try { fs.unlinkSync(luacPath); } catch (e) {}
+                    } else {
+                        await interaction.editReply({ content: `✅ **تم فك التشفير بنجاح!**\n🎯 النوع: ${quickDetect.name}\n🔓 الأداة: ${toolUsed}` });
                     }
-                    const attachment = new AttachmentBuilder(finalBuffer, { name: finalName });
-                    await interaction.editReply({ embeds: [embed], files: [attachment] });
+
+                    await interaction.editReply({ files: [new AttachmentBuilder(finalBuffer, { name: finalName })] });
                     return;
+
                 } catch (error) {
-                    Logger.log("ERROR", "External tool failed", { error: error.message });
-                    await interaction.editReply({ content: `⚠️ Tool failed: \`${error.message.slice(0, 1500)}\`\nFalling back to Aggressive JS engine...` });
+                    Logger.log("ERROR", `Tool ${toolUsed} failed`, { error: error.message });
+                    await interaction.editReply({ content: `⚠️ أداة ${toolUsed} فشلت. جاري التحويل للمحرك الاحتياطي...` });
                 }
+            }
+
+            if (quickDetect.name === "MoonVeil" || vmInfo.isVM || code.includes("MoonVeil")) {
+                await interaction.editReply({ content: `⏳ **VM Detected**. Running inside Lua Sandbox...` });
+                const sandboxLogs = await LuaSandbox.run(code);
+                await interaction.editReply({ content: `✅ Sandbox Extraction Complete.`, files: [new AttachmentBuilder(Buffer.from(sandboxLogs), { name: "sandbox_logs.txt" })] });
+                return;
             }
 
             const beautify = interaction.options.getBoolean("beautify") !== false;
@@ -265,54 +273,17 @@ client.on("interactionCreate", async (interaction) => {
             await deobf.run();
 
             const elapsed = Date.now() - startTime;
-            const ratio = ((1 - deobf.stats.finalSize / deobf.stats.originalSize) * 100).toFixed(1);
-
-            const embed = new EmbedBuilder()
-                .setColor(deobf.stats.isNested ? 0x9933ff : 0x00ff88)
-                .setTitle("🚀 Deobfuscation Complete (V4)")
-                .setDescription(`**Source:** ${source}`)
-                .addFields(
-                    { name: "🎯 Type", value: deobf.detection.name, inline: true },
-                    { name: "🎚️ Confidence", value: `${deobf.detection.confidence}%`, inline: true },
-                    { name: "🧅 Layers", value: deobf.stats.isNested ? `${deobf.stats.layerCount}` : "1", inline: true },
-                    { name: "🖥️ VM", value: deobf.vmInfo?.isVM ? `Yes (${deobf.vmInfo.confidence}%)` : "No", inline: true },
-                    { name: "🛡️ Anti-Tamper", value: deobf.antiTamper?.riskLevel || "NONE", inline: true },
-                    { name: "⚡ Reduced", value: `${ratio}%`, inline: true },
-                    { name: "🔓 Strings", value: `${deobf.stats.stringsDecoded}`, inline: true },
-                    { name: "🔁 Passes", value: `${deobf.stats.loops}`, inline: true },
-                    { name: "⏱️ Time", value: `${elapsed}ms`, inline: true },
-                    { name: "📊 Original", value: `${deobf.stats.originalLines.toLocaleString()} lines\n${deobf.stats.originalSize.toLocaleString()} bytes`, inline: true },
-                    { name: "📉 Final", value: `${deobf.stats.finalLines.toLocaleString()} lines\n${deobf.stats.finalSize.toLocaleString()} bytes`, inline: true },
-                );
-            
-            const decoders = [];
-            if (deobf.stats.wearedevsDecoded > 0) decoders.push(`WeAreDevs: ${deobf.stats.wearedevsDecoded}`);
-            if (deobf.stats.base64Decoded > 0) decoders.push(`Base64: ${deobf.stats.base64Decoded}`);
-            if (deobf.stats.hexDecoded > 0) decoders.push(`Hex: ${deobf.stats.hexDecoded}`);
-            if (deobf.stats.escapesDecoded > 0) decoders.push(`Escapes: ${deobf.stats.escapesDecoded}`);
-            if (deobf.stats.stringRefsResolved > 0) decoders.push(`StringRefs: ${deobf.stats.stringRefsResolved}`);
-            if (deobf.stats.mathSimplified > 0) decoders.push(`Math: ${deobf.stats.mathSimplified}`);
-            if (deobf.stats.xorDecoded > 0) decoders.push(`XOR: ${deobf.stats.xorDecoded}`);
-            
-            if (decoders.length > 0) embed.addFields({ name: "🔓 Detailed Decoded", value: decoders.join(" • ").slice(0, 1000) });
-            
-            const recs = deobf.buildRecommendations();
-            if (recs.length > 0) embed.addFields({ name: "💡 Recommendations", value: recs.slice(0, 5).map(r => `• ${r}`).join("\n").slice(0, 1000) });
-            if (deobf.webhooks.length > 0) embed.addFields({ name: "⚠️ Webhooks", value: deobf.webhooks.slice(0, 3).map(w => `\`${w.slice(0, 80)}\``).join("\n").slice(0, 1000) });
-            if (deobf.keys.length > 0) embed.addFields({ name: "🔑 Possible Keys", value: deobf.keys.slice(0, 5).map(k => `\`${k}\``).join("\n").slice(0, 1000) });
-            
-            embed.addFields({ name: "📈 Entropy", value: `${deobf.stats.entropy}`, inline: true });
-            embed.setTimestamp().setFooter({ text: "V4 • Aggressive Deobfuscation" });
-
             const report = buildReport(deobf);
             const buffer = Buffer.from(report, "utf-8");
             const attachment = new AttachmentBuilder(buffer, { name: "deobfuscated.txt" });
 
-            await interaction.editReply({ embeds: [embed], files: [attachment] });
+            const summary = `✅ **Deobfuscation Complete (JS Engine)**\n🎯 Type: **${deobf.detection.name}** (${deobf.detection.confidence}%)\n🔓 Math Ops: **${deobf.stats.mathSimplified}**\n⏱️ Time: **${elapsed}ms**`;
+
+            await interaction.editReply({ content: summary, files: [attachment] });
+
         } catch (error) {
             Logger.log("ERROR", "Deobfuscation failed", { error: error.message });
-            const embed = new EmbedBuilder().setColor(0xff0000).setTitle("❌ Deobfuscation Failed").setDescription(`**Error:** ${error.message.slice(0, 2000)}`).setTimestamp();
-            await interaction.editReply({ embeds: [embed] });
+            await interaction.editReply({ content: `❌ Deobfuscation Failed: ${error.message.slice(0, 1500)}` });
         }
         return;
     }
@@ -321,14 +292,8 @@ client.on("interactionCreate", async (interaction) => {
 client.on("error", (error) => Logger.log("ERROR", "Client error", { error: error.message }));
 process.on("unhandledRejection", (error) => Logger.log("ERROR", "Unhandled rejection", { error: error?.message || error }));
 
-if (!process.env.DISCORD_TOKEN) {
-    Logger.log("ERROR", "DISCORD_TOKEN missing");
-    process.exit(1);
-}
-if (!process.env.CLIENT_ID) {
-    Logger.log("ERROR", "CLIENT_ID missing");
-    process.exit(1);
-}
+if (!process.env.DISCORD_TOKEN) { process.exit(1); }
+if (!process.env.CLIENT_ID) { process.exit(1); }
 
 Logger.log("INFO", "Starting bot V4 God-Mode...");
 client.login(process.env.DISCORD_TOKEN).catch((error) => {
