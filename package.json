@@ -2,17 +2,16 @@
   "name": "deobf-bot",
   "version": "4.0.0",
   "description": "Advanced Lua Deobfuscator",
-  "main": "telegram_bot.js",
+  "main": "bot.js",
   "scripts": {
-    "start": "node telegram_bot.js"
+    "start": "node bot.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
     "@discordjs/rest": "^2.2.0",
     "discord-api-types": "^0.37.61",
     "node-fetch": "^2.7.0",
-    "wasmoon": "^1.16.0",
-    "node-telegram-bot-api": "^0.65.1"
+    "wasmoon": "^1.16.0"
   },
   "engines": {
     "node": ">=18.0.0"
