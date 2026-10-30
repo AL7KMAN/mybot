@@ -19,9 +19,7 @@ RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh \
     && rm dotnet-install.sh
 
 WORKDIR /app
-
 COPY . .
-
 RUN npm install
 
 RUN python3.12 -m venv /opt/venv
