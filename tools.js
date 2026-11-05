@@ -6,6 +6,26 @@ class PythonBridge {
     static stripAnsi(str) {
         return str.replace(/\x1b\[[0-9;]*m/g, '').replace(/\[\d+m/g, '');
     }
+
+    static cleanTraceOutput(str) {
+        const lines = str.split('\n');
+        const cleanLines = lines.filter(line => {
+            const l = line.trim();
+            if (l.startsWith('Processing ')) return false;
+            if (l.startsWith('Executing ')) return false;
+            if (l.startsWith('UNPACK CALLED')) return false;
+            if (l.startsWith('CAPTURED CHUNK')) return false;
+            if (l.startsWith('ACCESSED (NIL)')) return false;
+            if (l.startsWith('local Constants =')) return false;
+            if (l.startsWith('{ [1] =')) return false;
+            if (l.startsWith('File "') && l.includes('", line ')) return false;
+            if (l.startsWith('Traceback')) return false;
+            if (l.includes('Error:') && l.includes('File "')) return false;
+            return true;
+        });
+        return cleanLines.join('\n').trim();
+    }
+
     static async run(tool, inputFile) {
         return new Promise((resolve, reject) => {
             let cmd, args;
@@ -37,12 +57,21 @@ class PythonBridge {
                             reject(new Error("Failed to read Moonsec output"));
                         }
                     } else {
-                        const outputFilePath = path.join(path.dirname(inputFile), "output.lua");
-                        if (fs.existsSync(outputFilePath)) {
-                            const deobfCode = fs.readFileSync(outputFilePath, "utf-8");
-                            resolve(deobfCode);
+                        const possibleOutputs = ["output.lua", "dump.lua", "deobfuscated.lua"];
+                        let foundFile = null;
+                        for (const outName of possibleOutputs) {
+                            const outPath = path.join(path.dirname(inputFile), outName);
+                            if (fs.existsSync(outPath)) {
+                                foundFile = fs.readFileSync(outPath, "utf-8");
+                                break;
+                            }
+                        }
+                        
+                        if (foundFile) {
+                            resolve(foundFile);
                         } else {
-                            resolve(this.stripAnsi(stdout) || "Success");
+                            const cleaned = this.cleanTraceOutput(this.stripAnsi(stdout));
+                            resolve(cleaned || "Deobfuscation finished, but no code was extracted. The tool may be incompatible with this specific script version.");
                         }
                     }
                 } else {
