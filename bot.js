@@ -219,13 +219,6 @@ client.on("interactionCreate", async (interaction) => {
             const quickDetect = new Detector(code).detect();
             const vmInfo = VMAnalyzer.analyze(code);
 
-            if (quickDetect.name === "MoonVeil" || vmInfo.isVM || code.includes("MoonVeil")) {
-                await interaction.editReply({ content: `⏳ **VM Detected**. Running inside Lua Sandbox...` });
-                const sandboxLogs = await LuaSandbox.run(code);
-                await interaction.editReply({ content: `✅ Sandbox Extraction Complete.`, files: [new AttachmentBuilder(Buffer.from(sandboxLogs), { name: "sandbox_logs.txt" })] });
-                return;
-            }
-
             await interaction.editReply({ content: `🧠 **الدماغ الذكي يعمل:** جاري تحليل السكربت وتجربة الأدوات بالترتيب...` });
             
             const tempDir = path.join(__dirname, `temp_pipeline_${Date.now()}`);
@@ -234,22 +227,30 @@ client.on("interactionCreate", async (interaction) => {
             try {
                 const pipelineResult = await Pipeline.runWeAreDevsChain(code, tempDir);
                 
-                if (!pipelineResult.code || !Pipeline.isCleanCode(pipelineResult.code)) {
-                    await interaction.editReply({ content: `❌ **فشلت جميع الأدوات في فك التشفير بالكامل.**\nالأدوات التي تمت تجربتها: ${pipelineResult.tools.join(", ") || "لا شيء"}\nقد يكون السكربت محمي بـ VM معقد أو أن المفتاح غير موجود.` });
+                if (pipelineResult.code && Pipeline.isCleanCode(pipelineResult.code)) {
+                    let finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
+                    let finalName = `deobfuscated_full.lua`;
+                    let toolText = pipelineResult.tools.join(" ➔ ");
+
+                    await interaction.editReply({ content: `✅ **تم فك التشفير بنجاح!**\n🧠 الأدوات المستخدمة: ${toolText}\n✨ تم ترتيب الكود تلقائياً.` });
+                    await interaction.editReply({ files: [new AttachmentBuilder(finalBuffer, { name: finalName })] });
+                    
+                    fs.rmSync(tempDir, { recursive: true, force: true });
+                    return;
+                } 
+                
+                if (quickDetect.name === "MoonVeil" || vmInfo.isVM || code.includes("MoonVeil")) {
+                    await interaction.editReply({ content: `⚠️ فشلت الأدوات في الفك الكامل، جاري تشغيل الساندبوكس كخيار أخير...` });
+                    const sandboxLogs = await LuaSandbox.run(code);
+                    await interaction.editReply({ content: `✅ Sandbox Extraction Complete.`, files: [new AttachmentBuilder(Buffer.from(sandboxLogs), { name: "sandbox_logs.txt" })] });
                     fs.rmSync(tempDir, { recursive: true, force: true });
                     return;
                 }
 
-                let finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
-                let finalName = `deobfuscated_full.lua`;
-                let toolText = pipelineResult.tools.join(" ➔ ");
-
-                await interaction.editReply({ content: `✅ **تم فك التشفير بنجاح!**\n🧠 الأدوات المستخدمة: ${toolText}\n✨ تم ترتيب الكود تلقائياً.` });
-                await interaction.editReply({ files: [new AttachmentBuilder(finalBuffer, { name: finalName })] });
-                
+                await interaction.editReply({ content: `❌ **فشلت جميع الأدوات في فك التشفير بالكامل.**\nالأدوات التي تمت تجربتها: ${pipelineResult.tools.join(", ") || "لا شيء"}` });
                 fs.rmSync(tempDir, { recursive: true, force: true });
                 return;
-                
+
             } catch (err) {
                 Logger.log("ERROR", "Pipeline failed", { error: err.message });
                 await interaction.editReply({ content: `❌ خطأ في الدماغ الذكي: ${err.message}` });
