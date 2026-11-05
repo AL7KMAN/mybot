@@ -4,17 +4,20 @@ const { Routes } = require("discord-api-types/v9");
 const fs = require("fs");
 const path = require("path");
 
+// 1. ربط الملفات الجديدة
 const {
     Logger,
-    PythonBridge,
-    LuaSandbox,
     Detector,
     VMAnalyzer,
+    AntiTamperDetector,
     Deobfuscator,
     fetchCodeFromUrl,
     readAttachment,
     buildReport
-} = require('./engines.js');
+} = require('./core.js');
+
+const { PythonBridge } = require('./tools.js');
+const { LuaSandbox } = require('./sandbox.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -261,7 +264,9 @@ client.on("interactionCreate", async (interaction) => {
 
                 } catch (error) {
                     Logger.log("ERROR", `Tool ${toolUsed} failed`, { error: error.message });
-                    await interaction.editReply({ content: `⚠️ أداة ${toolUsed} فشلت. جاري التحويل للمحرك الاحتياطي...` });
+                    // 3. إضافة return عشان البوت يوقف هنا وما يروح للساندبوكس
+                    await interaction.editReply({ content: `❌ **فشلت أداة ${toolUsed}**\nالسبب: \`${error.message}\`\n\nتأكد من أن السكربت سليم أو جرب أداة أخرى.` });
+                    return;
                 }
             }
 
