@@ -33,48 +33,54 @@ class Pipeline {
         return out.join("\n");
     }
 
-    static async runWeAreDevsChain(originalCode, tempDir) {
+    static async runChain(originalCode, tempDir, detectionName) {
         let currentCode = originalCode;
         let finalCode = null;
         let usedTools = [];
         let isBytecode = false;
 
-        const tools = ["wearedevs", "prometheus"];
+        const jsDeobf = new Deobfuscator(currentCode, { beautify: false });
+        await jsDeobf.run();
+        currentCode = jsDeobf.code;
+        
+        if (jsDeobf.stats.mathSimplified > 0 || jsDeobf.stats.stringsDecoded > 0) {
+            usedTools.push("JS-Engine-First");
+        }
 
-        for (const tool of tools) {
-            try {
-                const tempIn = path.join(tempDir, `wd_${Date.now()}_${tool}.lua`);
-                fs.writeFileSync(tempIn, currentCode);
-                
-                let result = await PythonBridge.run(tool, tempIn);
-                
-                try { fs.unlinkSync(tempIn); } catch (e) {}
+        if (this.isCleanCode(currentCode)) {
+            finalCode = currentCode;
+            usedTools.push("JS-Clean");
+        }
 
-                if (result.startsWith("BYTECODE_HEX:")) {
-                    isBytecode = true;
-                    finalCode = result;
-                    usedTools.push(tool);
-                    break;
-                }
+        if (!finalCode) {
+            let tool = null;
+            if (detectionName.includes("WeAreDevs")) tool = "wearedevs";
+            else if (detectionName.includes("Moonsec")) tool = "moonsec";
+            else if (detectionName.includes("Prometheus")) tool = "prometheus";
 
-                if (this.isCleanCode(result)) {
-                    currentCode = result;
-                    finalCode = result;
-                    usedTools.push(tool);
-                    break;
-                } else {
-                    currentCode = result;
-                    usedTools.push(tool);
-                }
-            } catch (e) {
-                continue;
+            if (tool) {
+                try {
+                    const tempIn = path.join(tempDir, `chain_${Date.now()}_${tool}.lua`);
+                    fs.writeFileSync(tempIn, currentCode);
+                    let result = await PythonBridge.run(tool, tempIn);
+                    try { fs.unlinkSync(tempIn); } catch (e) {}
+
+                    if (result.startsWith("BYTECODE_HEX:")) {
+                        isBytecode = true;
+                        finalCode = result;
+                        usedTools.push(tool);
+                    } else {
+                        currentCode = result;
+                        usedTools.push(tool);
+                    }
+                } catch (e) {}
             }
         }
 
         if (isBytecode) {
             try {
                 const luacBuffer = Buffer.from(finalCode.replace("BYTECODE_HEX:", ""), "hex");
-                const luacPath = path.join(tempDir, `wd_${Date.now()}.luac`);
+                const luacPath = path.join(tempDir, `chain_${Date.now()}.luac`);
                 fs.writeFileSync(luacPath, luacBuffer);
                 
                 const unluacRes = await PythonBridge.runUnluac(luacPath);
@@ -91,15 +97,15 @@ class Pipeline {
         if (!finalCode) finalCode = currentCode;
 
         try {
-            const deobf = new Deobfuscator(finalCode, { beautify: false });
-            await deobf.run();
-            finalCode = deobf.code;
-            usedTools.push("JS-Engine");
+            const finalDeobf = new Deobfuscator(finalCode, { beautify: false });
+            await finalDeobf.run();
+            finalCode = finalDeobf.code;
+            if (finalDeobf.stats.stringsDecoded > 0) usedTools.push("JS-Final");
         } catch (e) {}
 
         finalCode = this.beautify(finalCode);
 
-        return { code: finalCode, tools: usedTools, isBytecode: false };
+        return { code: finalCode, tools: usedTools, isBytecode: false, isClean: this.isCleanCode(finalCode) };
     }
 }
 
