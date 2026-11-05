@@ -9,30 +9,31 @@ class LuaSandbox {
             const processedCode = code.replace(/0b([01]+)/g, (match, bin) => parseInt(bin, 2).toString());
             
             const fakeInstance = (className) => ({
-                ClassName: className, Name: className, Parent: null, Visible: true,
-                Position: { X: 0, Y: 0, Z: 0 }, Size: { X: 0, Y: 0, Z: 0 },
-                Children: [], FindFirstChild: function() { return this; },
-                WaitForChild: function() { return this; }, GetChildren: function() { return []; },
-                IsA: function() { return true; }, Destroy: function() {},
-                Clone: function() { return this; }, SetAttribute: function() {},
-                GetAttribute: function() { return null; },
+                ClassName: className, Name: className, Parent: null,
+                FindFirstChild: function() { return this; },
+                WaitForChild: function() { return this; },
+                IsA: function() { return true; },
+                Destroy: function() {},
                 Connect: function() { return { Disconnect: function() {} }; }
             });
 
             const fakeEnv = {
                 game: {
-                    GetService: (name) => { logs.push(`[GETSERVICE] ${name}`); return fakeInstance(name); },
-                    HttpGet: (url) => { logs.push(`[HTTPGET] ${url}`); return "-- sandbox block"; },
-                    IsLoaded: () => true, PlaceId: 123456, JobId: "sandbox-123"
+                    GetService: (name) => fakeInstance(name),
+                    HttpGet: (url) => { logs.push(`[HTTPGET] ${url}`); return "-- block"; },
+                    IsLoaded: () => true, PlaceId: 123456, JobId: "sandbox"
                 },
                 workspace: fakeInstance("Workspace"),
                 script: fakeInstance("Script"),
-                Instance: { new: (type) => { logs.push(`[INSTANCE] ${type}`); return fakeInstance(type); } },
-                loadstring: (src) => { logs.push(`[LOADSTRING]`); return () => {}; },
+                Instance: { new: (type) => fakeInstance(type) },
+                loadstring: (src) => {
+                    logs.push(`\n[LOADSTRING CAPTURED]\n${src}\n-------------------\n`);
+                    return () => {};
+                },
                 print: (...args) => { logs.push(`[PRINT] ${args.join(' ')}`); },
                 warn: (...args) => { logs.push(`[WARN] ${args.join(' ')}`); },
-                error: (...args) => { logs.push(`[ERROR] ${args.join(' ')}`); throw new Error(args[0]); },
-                task: { wait: () => {}, spawn: (f) => { try { f(); } catch(e){} }, delay: (t, f) => {} },
+                error: (...args) => { logs.push(`[ERROR] ${args.join(' ')}`); },
+                task: { wait: () => {}, spawn: (f) => { try { f(); } catch(e){} } },
                 getfenv: () => fakeEnv, setfenv: (f, env) => f,
                 newproxy: () => ({}), setmetatable: (t, mt) => t, getmetatable: (t) => null,
                 rawget: (t, k) => t ? t[k] : null, rawset: (t, k, v) => { if (t) t[k] = v; return t; },
@@ -50,7 +51,7 @@ class LuaSandbox {
             for (const [key, val] of Object.entries(fakeEnv)) { try { lua.global.set(key, val); } catch(e) {} }
             
             const execute = lua.doString(processedCode);
-            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Sandbox execution timed out")), 4000));
+            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Sandbox execution timed out")), 5000));
             await Promise.race([execute, timeout]);
             
             return logs.length > 0 ? logs.join('\n') : "Sandbox executed successfully, but no logs were captured.";
