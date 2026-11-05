@@ -1185,4 +1185,160 @@ class Deobfuscator {
 
     buildRecommendations() {
         const recs = [];
-        if (this.stats.isNested) re
+        if (this.stats.isNested) recs.push(`This script has ${this.stats.layerCount} layers. Use /layers to unwrap step by step.`);
+        if (this.vmInfo?.isVM) recs.push(`VM structure detected (confidence ${this.vmInfo.confidence}%). Full deobfuscation requires a runtime sandbox.`);
+        if (this.antiTamper?.riskLevel === "HIGH") recs.push(`High-risk anti-tamper detected. This script will deadlock or kick in unprotected environments.`);
+        if (this.detection.name.includes("Luraph") || this.detection.name.includes("Moonsec") || this.detection.name.includes("Luarmor")) {
+            recs.push(`This obfuscator requires specialized tools (Python/C# based). JS-only deobfuscation has limits.`);
+        }
+        if (this.stats.wearedevsDecoded > 0) recs.push(`WeAreDevs strings decoded. Bytecode layer requires a runtime to fully unwrap.`);
+        if (this.detection.name === "Clean") recs.push(`No obfuscation detected. Script is clean.`);
+        if (recs.length === 0) recs.push(`Try /deobf_file with a fresh sample, or use /detect to verify the type.`);
+        return recs;
+    }
+}
+
+async function fetchCodeFromUrl(url) {
+    let fixedUrl = url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
+    if (fixedUrl.includes("pastebin.com") && !fixedUrl.includes("/raw/")) fixedUrl = fixedUrl.replace("pastebin.com/", "pastebin.com/raw/");
+    const response = await fetch(fixedUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    const text = await response.text();
+    if (text.trim().toLowerCase().startsWith("<!doctype html>") || text.trim().toLowerCase().startsWith("<html")) {
+        throw new Error("The URL returned an HTML web page, not a raw Lua script. Please provide a direct RAW link.");
+    }
+    return text;
+}
+
+async function readAttachment(attachment) {
+    if (attachment.size > 5 * 1024 * 1024) throw new Error("File too large (max 5MB)");
+    const valid = [".lua", ".txt", ".luau", ".luac"];
+    if (!valid.some(e => attachment.name.toLowerCase().endsWith(e))) throw new Error("Invalid file type");
+    const response = await fetch(attachment.url);
+    if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
+    return await response.text();
+}
+
+function buildReport(result) {
+    let r = "═══════════════════════════════════════════════\n";
+    r += "         DEOBFUSCATION REPORT (V4)\n";
+    r += "═══════════════════════════════════════════════\n\n";
+    r += "🎯 DETECTION\n";
+    r += `   Type: ${result.detection.name}\n`;
+    r += `   Confidence: ${result.detection.confidence}%\n`;
+    r += `   Nested: ${result.stats.isNested ? "YES (" + result.stats.layerCount + " layers)" : "NO"}\n`;
+    if (result.detection.signals.length > 0) r += `   Signals: ${result.detection.signals.slice(0, 5).join(", ")}\n`;
+    if (result.detection.generic.length > 0) r += `   Generic: ${result.detection.generic.join(", ")}\n`;
+    r += "\n";
+    if (result.vmInfo) {
+        r += "🖥️ VM ANALYSIS\n";
+        r += `   Is VM: ${result.vmInfo.isVM ? "YES ✅" : "No"}\n`;
+        r += `   Score: ${result.vmInfo.score}/20 (confidence ${result.vmInfo.confidence}%)\n`;
+        r += `   Family: ${result.vmInfo.likelyFamily}\n`;
+        r += `   Dispatch Loop: ${result.vmInfo.hasDispatchLoop ? "Yes" : "No"}\n`;
+        r += `   Bit Ops: ${result.vmInfo.usesBitOps ? "Yes" : "No"}\n`;
+        r += `   Getfenv: ${result.vmInfo.usesGetfenv ? "Yes" : "No"}\n`;
+        r += `   Newproxy: ${result.vmInfo.usesNewproxy ? "Yes" : "No"}\n`;
+        r += `   Register Count: ${result.vmInfo.registerCount}\n`;
+        r += `   Hex Keys: ${result.vmInfo.hexKeyCount}\n`;
+        r += `   Function Factory: ${result.vmInfo.hasFuncFactory ? "Yes" : "No"}\n`;
+        r += "\n";
+    }
+    if (result.antiTamper) {
+        r += "🛡️ ANTI-TAMPER ANALYSIS\n";
+        r += `   Risk Level: ${result.antiTamper.riskLevel}\n`;
+        r += `   Total Patterns: ${result.antiTamper.count}\n`;
+        for (const p of result.antiTamper.patterns) r += `   [${p.severity.toUpperCase()}] ${p.name} x${p.count}\n`;
+        r += "\n";
+    }
+    if (result.layers.length > 0) {
+        r += "🧅 LAYER ANALYSIS (ONION)\n";
+        for (const layer of result.layers) {
+            r += `   Layer ${layer.depth}: ${layer.name} (${layer.confidence}%) - ${layer.lines} lines, ${layer.size} bytes\n`;
+            if (layer.signals.length > 0) r += `      signals: ${layer.signals.slice(0, 3).join(", ")}\n`;
+        }
+        r += "\n";
+    }
+    r += "📊 STATISTICS\n";
+    r += `   Original: ${result.stats.originalSize} bytes (${result.stats.originalLines} lines)\n`;
+    r += `   Final:    ${result.stats.finalSize} bytes (${result.stats.finalLines} lines)\n`;
+    const ratio = ((1 - result.stats.finalSize / result.stats.originalSize) * 100).toFixed(1);
+    r += `   Reduced:  ${ratio}%\n`;
+    r += `   Entropy:  ${result.stats.entropy}\n`;
+    r += "\n";
+    r += "🔓 DECODING RESULTS\n";
+    r += `   Aggressive Strings: ${result.stats.stringsDecoded}\n`;
+    r += `   Deep Passes:        ${result.stats.loops}\n`;
+    if (result.stats.wearedevsDecoded > 0) r += `   WeAreDevs:          ${result.stats.wearedevsDecoded}\n`;
+    if (result.stats.base64Decoded > 0) r += `   Base64:             ${result.stats.base64Decoded}\n`;
+    if (result.stats.hexDecoded > 0) r += `   Hex:                ${result.stats.hexDecoded}\n`;
+    if (result.stats.escapesDecoded > 0) r += `   Escapes:            ${result.stats.escapesDecoded}\n`;
+    if (result.stats.stringRefsResolved > 0) r += `   String refs:        ${result.stats.stringRefsResolved}\n`;
+    if (result.stats.mathSimplified > 0) r += `   Math ops:           ${result.stats.mathSimplified}\n`;
+    if (result.stats.antiDebugRemoved > 0) r += `   Anti-debug:         ${result.stats.antiDebugRemoved}\n`;
+    if (result.stats.xorDecoded > 0) r += `   XOR candidates:     ${result.stats.xorDecoded}\n`;
+    if (result.stats.extractedAlphabet) r += `   Alphabet: EXTRACTED (85 chars)\n`;
+    r += "\n";
+    const recs = result.buildRecommendations();
+    if (recs.length > 0) {
+        r += "💡 RECOMMENDATIONS\n";
+        for (const rec of recs) r += `   • ${rec}\n`;
+        r += "\n";
+    }
+    if (result.stringTableAnalyzer && result.stringTableAnalyzer.tables.length > 0) {
+        r += "📚 STRING TABLES\n";
+        for (const t of result.stringTableAnalyzer.tables.slice(0, 10)) r += `   ${t.name}: ${t.strings.length} strings\n`;
+        r += "\n";
+    }
+    if (result.xorResults.length > 0) {
+        r += "🧮 XOR BRUTE FORCE\n";
+        for (const x of result.xorResults) {
+            for (const r2 of x.results.slice(0, 2)) r += `   [${r2.key}] ${JSON.stringify(r2.sample.slice(0, 80))}\n`;
+        }
+        r += "\n";
+    }
+    if (result.urls.length > 0) {
+        r += "🌐 URLS FOUND\n";
+        for (const u of result.urls.slice(0, 10)) r += `   ${u}\n`;
+        r += "\n";
+    }
+    if (result.webhooks.length > 0) {
+        r += "⚠️ WEBHOOKS FOUND\n";
+        for (const w of result.webhooks) r += `   ${w}\n`;
+        r += "\n";
+    }
+    if (result.keys.length > 0) {
+        r += "🔑 KEYS FOUND\n";
+        for (const k of result.keys.slice(0, 10)) r += `   ${k}\n`;
+        r += "\n";
+    }
+    if (result.warnings.length > 0) {
+        r += "⚠️ WARNINGS\n";
+        for (const w of result.warnings) r += `   ${w}\n`;
+        r += "\n";
+    }
+    r += "📝 PROCESSING LOG\n";
+    for (const l of result.log) r += `   > ${l}\n`;
+    r += "\n";
+    r += "═══════════════════════════════════════════════\n";
+    r += "               DEOBFUSCATED CODE\n";
+    r += "═══════════════════════════════════════════════\n\n";
+    r += result.code;
+    return r;
+}
+
+module.exports = {
+    Logger,
+    Base85,
+    CustomBase64,
+    Decoders,
+    StringTableAnalyzer,
+    VMAnalyzer,
+    AntiTamperDetector,
+    Detector,
+    MathOBFEvaluator,
+    Deobfuscator,
+    fetchCodeFromUrl,
+    readAttachment,
+    buildReport
+};
