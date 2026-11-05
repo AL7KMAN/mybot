@@ -239,6 +239,12 @@ client.on("interactionCreate", async (interaction) => {
                     return;
                 } 
                 
+                if (quickDetect.name === "WeAreDevs" || code.includes("wearedevs.net")) {
+                     await interaction.editReply({ content: `❌ **فشلت أدوات WeAreDevs في استخراج كود نظيف 100% من هذا السكربت.**\nالسكربت قد يكون محمياً بشكل معقد (مثل دمج VM) أو أن الأداة واجهت خطأ.` });
+                     fs.rmSync(tempDir, { recursive: true, force: true });
+                     return;
+                }
+
                 if (quickDetect.name === "MoonVeil" || vmInfo.isVM || code.includes("MoonVeil")) {
                     await interaction.editReply({ content: `⚠️ فشلت الأدوات في الفك الكامل، جاري تشغيل الساندبوكس كخيار أخير...` });
                     const sandboxLogs = await LuaSandbox.run(code);
