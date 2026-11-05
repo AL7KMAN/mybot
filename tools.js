@@ -26,6 +26,7 @@ class PythonBridge {
             let stderr = "";
             proc.stdout.on("data", (data) => { stdout += data.toString(); });
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
+            
             proc.on("close", (code) => {
                 if (code === 0) {
                     if (tool === "moonsec") {
@@ -36,7 +37,13 @@ class PythonBridge {
                             reject(new Error("Failed to read Moonsec output"));
                         }
                     } else {
-                        resolve(this.stripAnsi(stdout) || "Success");
+                        const outputFilePath = path.join(path.dirname(inputFile), "output.lua");
+                        if (fs.existsSync(outputFilePath)) {
+                            const deobfCode = fs.readFileSync(outputFilePath, "utf-8");
+                            resolve(deobfCode);
+                        } else {
+                            resolve(this.stripAnsi(stdout) || "Success");
+                        }
                     }
                 } else {
                     const errMsg = this.stripAnsi(stderr || "Unknown error").slice(0, 1500);
