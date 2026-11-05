@@ -14,7 +14,7 @@ class PythonBridge {
                 args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
             } else if (tool === "wearedevs") {
                 cmd = "/opt/venv/bin/python3";
-                args = [path.join(__dirname, "tools/wearedevs/main.py"), inputFile];
+                args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
             } else if (tool === "moonsec") {
                 cmd = "dotnet";
                 args = [path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
