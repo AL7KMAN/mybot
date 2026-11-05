@@ -115,6 +115,24 @@ client.on("interactionCreate", async (interaction) => {
             const quickDetect = new Detector(code).detect();
             const vmInfo = VMAnalyzer.analyze(code);
 
+            if (quickDetect.name === "MoonVeil" || vmInfo.isVM || code.includes("wearedevs.net/obfuscator") || code.includes("zy28uHLFUuAPgKtOc0AcRNq")) {
+                await interaction.editReply({ content: `⏳ **VM Detected**. Running inside Lua Sandbox to extract payload...` });
+                const sandboxLogs = await LuaSandbox.run(code);
+                
+                if (sandboxLogs.includes("[LOADSTRING CAPTURED]")) {
+                    const extractedCode = sandboxLogs.split("[LOADSTRING CAPTURED]")[1].split("-------------------")[0].trim();
+                    const finalDeobf = new Deobfuscator(extractedCode, { beautify: true });
+                    await finalDeobf.run();
+                    
+                    const buffer = Buffer.from(finalDeobf.code, "utf-8");
+                    await interaction.editReply({ content: `✅ **Extracted Payload from VM successfully!**`, files: [new AttachmentBuilder(buffer, { name: "deobfuscated_clean.lua" })] });
+                } else {
+                    const buffer = Buffer.from(sandboxLogs, "utf-8");
+                    await interaction.editReply({ content: `⚠️ **Sandbox ran, but no loadstring captured.** Check logs:`, files: [new AttachmentBuilder(buffer, { name: "sandbox_logs.txt" })] });
+                }
+                return;
+            }
+
             await interaction.editReply({ content: `🧠 **الدماغ الذكي يعمل (V5):** جاري فحص السكربت وتجربة المحركات...` });
             
             const tempDir = path.join(__dirname, `temp_pipeline_${Date.now()}`);
@@ -137,14 +155,6 @@ client.on("interactionCreate", async (interaction) => {
                     return;
                 } 
                 
-                if (quickDetect.name === "MoonVeil" || vmInfo.isVM) {
-                    await interaction.editReply({ content: `⚠️ فشلت الأدوات، جاري تشغيل الساندبوكس...` });
-                    const sandboxLogs = await LuaSandbox.run(code);
-                    await interaction.editReply({ content: `✅ Sandbox Extraction Complete.`, files: [new AttachmentBuilder(Buffer.from(sandboxLogs), { name: "sandbox_logs.txt" })] });
-                    fs.rmSync(tempDir, { recursive: true, force: true });
-                    return;
-                }
-
                 await interaction.editReply({ content: `❌ **فشلت جميع الأدوات.**` });
                 fs.rmSync(tempDir, { recursive: true, force: true });
                 return;
