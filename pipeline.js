@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { PythonBridge } = require("./tools.js");
+const { Deobfuscator } = require("./core.js");
 
 class Pipeline {
     static isCleanCode(code) {
@@ -32,17 +33,17 @@ class Pipeline {
         return out.join("\n");
     }
 
-    static async run(originalCode, tempDir) {
+    static async runWeAreDevsChain(originalCode, tempDir) {
         let currentCode = originalCode;
         let finalCode = null;
         let usedTools = [];
         let isBytecode = false;
 
-        const tools = ["wearedevs", "moonsec", "prometheus"];
+        const tools = ["wearedevs", "prometheus"];
 
         for (const tool of tools) {
             try {
-                const tempIn = path.join(tempDir, `pipeline_${Date.now()}_${tool}.lua`);
+                const tempIn = path.join(tempDir, `wd_${Date.now()}_${tool}.lua`);
                 fs.writeFileSync(tempIn, currentCode);
                 
                 let result = await PythonBridge.run(tool, tempIn);
@@ -73,24 +74,28 @@ class Pipeline {
         if (isBytecode) {
             try {
                 const luacBuffer = Buffer.from(finalCode.replace("BYTECODE_HEX:", ""), "hex");
-                const luacPath = path.join(tempDir, `pipeline_${Date.now()}.luac`);
+                const luacPath = path.join(tempDir, `wd_${Date.now()}.luac`);
                 fs.writeFileSync(luacPath, luacBuffer);
                 
                 const unluacRes = await PythonBridge.runUnluac(luacPath);
                 try { fs.unlinkSync(luacPath); } catch (e) {}
                 
-                if (unluacRes && this.isCleanCode(unluacRes)) {
+                if (unluacRes) {
                     finalCode = unluacRes;
                     usedTools.push("unluac");
+                    isBytecode = false;
                 }
             } catch (e) {}
         }
 
-        if (!finalCode || !this.isCleanCode(finalCode)) {
-            if (!finalCode || finalCode.startsWith("BYTECODE_HEX:")) {
-                return { code: finalCode || currentCode, tools: usedTools, isBytecode: isBytecode };
-            }
-        }
+        if (!finalCode) finalCode = currentCode;
+
+        try {
+            const deobf = new Deobfuscator(finalCode, { beautify: false });
+            await deobf.run();
+            finalCode = deobf.code;
+            usedTools.push("JS-Engine");
+        } catch (e) {}
 
         finalCode = this.beautify(finalCode);
 
