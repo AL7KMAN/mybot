@@ -4,7 +4,6 @@ const { Routes } = require("discord-api-types/v9");
 const fs = require("fs");
 const path = require("path");
 
-// 1. ربط الملفات الجديدة
 const {
     Logger,
     Detector,
@@ -16,8 +15,8 @@ const {
     buildReport
 } = require('./core.js');
 
-const { PythonBridge } = require('./tools.js');
 const { LuaSandbox } = require('./sandbox.js');
+const { Pipeline } = require('./pipeline.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -212,7 +211,6 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.commandName === "deobf" || interaction.commandName === "deobf_url" || interaction.commandName === "deobf_file") {
         await interaction.deferReply();
-        const startTime = Date.now();
         try {
             const { code, source } = await resolveCode(interaction);
             if (!code || code.trim().length === 0) throw new Error("No code found");
@@ -221,55 +219,6 @@ client.on("interactionCreate", async (interaction) => {
             const quickDetect = new Detector(code).detect();
             const vmInfo = VMAnalyzer.analyze(code);
 
-            let toolUsed = null;
-            if (quickDetect.name === "WeAreDevs" || code.includes("wearedevs.net/obfuscator")) toolUsed = "wearedevs";
-            else if (quickDetect.name === "Moonsec V3" || quickDetect.name === "Moonsec V2" || code.includes("MoonSec")) toolUsed = "moonsec";
-            else if (quickDetect.name === "Prometheus" || code.includes("Prometheus")) toolUsed = "prometheus";
-
-            if (toolUsed) {
-                await interaction.editReply({ content: `🎯 **تم التعرف على التشفير:** ${quickDetect.name}\n⏳ جاري تشغيل أداة **${toolUsed}** لفك التشفير بالكامل...` });
-                try {
-                    const tempIn = path.join(__dirname, `temp_${Date.now()}.lua`);
-                    fs.writeFileSync(tempIn, code);
-                    
-                    let resultCode = await PythonBridge.run(toolUsed, tempIn);
-                    try { fs.unlinkSync(tempIn); } catch (e) {}
-                    
-                    let finalBuffer = Buffer.from(resultCode, "utf-8");
-                    let finalName = `deobfuscated_${toolUsed}.lua`;
-                    
-                    if (resultCode.startsWith("BYTECODE_HEX:")) {
-                        const luacBuffer = Buffer.from(resultCode.replace("BYTECODE_HEX:", ""), "hex");
-                        const luacPath = path.join(__dirname, `temp_${Date.now()}.luac`);
-                        fs.writeFileSync(luacPath, luacBuffer);
-                        
-                        try {
-                            const unluacCode = await PythonBridge.runUnluac(luacPath);
-                            finalBuffer = Buffer.from(unluacCode, "utf-8");
-                            finalName = `deobfuscated_${toolUsed}_source.lua`;
-                            await interaction.editReply({ content: `✅ **تم فك التشفير بنجاح!**\n🎯 النوع: ${quickDetect.name}\n🔓 الأداة: ${toolUsed} + unluac` });
-                        } catch (e) {
-                            Logger.log("WARN", "unluac failed, sending raw bytecode", { error: e.message });
-                            finalBuffer = luacBuffer;
-                            finalName = `deobfuscated_${toolUsed}.luac`;
-                            await interaction.editReply({ content: `✅ **تم استخراج الـ Bytecode بنجاح!** (تعذر تحويله لكود لوا)` });
-                        }
-                        try { fs.unlinkSync(luacPath); } catch (e) {}
-                    } else {
-                        await interaction.editReply({ content: `✅ **تم فك التشفير بنجاح!**\n🎯 النوع: ${quickDetect.name}\n🔓 الأداة: ${toolUsed}` });
-                    }
-
-                    await interaction.editReply({ files: [new AttachmentBuilder(finalBuffer, { name: finalName })] });
-                    return;
-
-                } catch (error) {
-                    Logger.log("ERROR", `Tool ${toolUsed} failed`, { error: error.message });
-                    // 3. إضافة return عشان البوت يوقف هنا وما يروح للساندبوكس
-                    await interaction.editReply({ content: `❌ **فشلت أداة ${toolUsed}**\nالسبب: \`${error.message}\`\n\nتأكد من أن السكربت سليم أو جرب أداة أخرى.` });
-                    return;
-                }
-            }
-
             if (quickDetect.name === "MoonVeil" || vmInfo.isVM || code.includes("MoonVeil")) {
                 await interaction.editReply({ content: `⏳ **VM Detected**. Running inside Lua Sandbox...` });
                 const sandboxLogs = await LuaSandbox.run(code);
@@ -277,18 +226,36 @@ client.on("interactionCreate", async (interaction) => {
                 return;
             }
 
-            const beautify = interaction.options.getBoolean("beautify") !== false;
-            const deobf = new Deobfuscator(code, { beautify });
-            await deobf.run();
+            await interaction.editReply({ content: `🧠 **الدماغ الذكي يعمل:** جاري تحليل السكربت وتجربة الأدوات بالترتيب...` });
+            
+            const tempDir = path.join(__dirname, `temp_pipeline_${Date.now()}`);
+            fs.mkdirSync(tempDir, { recursive: true });
 
-            const elapsed = Date.now() - startTime;
-            const report = buildReport(deobf);
-            const buffer = Buffer.from(report, "utf-8");
-            const attachment = new AttachmentBuilder(buffer, { name: "deobfuscated.txt" });
+            try {
+                const pipelineResult = await Pipeline.runWeAreDevsChain(code, tempDir);
+                
+                if (!pipelineResult.code || !Pipeline.isCleanCode(pipelineResult.code)) {
+                    await interaction.editReply({ content: `❌ **فشلت جميع الأدوات في فك التشفير بالكامل.**\nالأدوات التي تمت تجربتها: ${pipelineResult.tools.join(", ") || "لا شيء"}\nقد يكون السكربت محمي بـ VM معقد أو أن المفتاح غير موجود.` });
+                    fs.rmSync(tempDir, { recursive: true, force: true });
+                    return;
+                }
 
-            const summary = `✅ **Deobfuscation Complete (JS Engine)**\n🎯 Type: **${deobf.detection.name}** (${deobf.detection.confidence}%)\n🔓 Math Ops: **${deobf.stats.mathSimplified}**\n⏱️ Time: **${elapsed}ms**`;
+                let finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
+                let finalName = `deobfuscated_full.lua`;
+                let toolText = pipelineResult.tools.join(" ➔ ");
 
-            await interaction.editReply({ content: summary, files: [attachment] });
+                await interaction.editReply({ content: `✅ **تم فك التشفير بنجاح!**\n🧠 الأدوات المستخدمة: ${toolText}\n✨ تم ترتيب الكود تلقائياً.` });
+                await interaction.editReply({ files: [new AttachmentBuilder(finalBuffer, { name: finalName })] });
+                
+                fs.rmSync(tempDir, { recursive: true, force: true });
+                return;
+                
+            } catch (err) {
+                Logger.log("ERROR", "Pipeline failed", { error: err.message });
+                await interaction.editReply({ content: `❌ خطأ في الدماغ الذكي: ${err.message}` });
+                fs.rmSync(tempDir, { recursive: true, force: true });
+                return;
+            }
 
         } catch (error) {
             Logger.log("ERROR", "Deobfuscation failed", { error: error.message });
