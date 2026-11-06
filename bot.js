@@ -3,6 +3,7 @@ const { REST } = require("@discordjs/rest");
 const { Routes } = require("discord-api-types/v9");
 const fs = require("fs");
 const path = require("path");
+const { spawn } = require("child_process"); // أضفنا spawn هنا لاستخدامه في الأداة الجديدة
 
 const {
     Logger,
@@ -14,7 +15,6 @@ const {
     readAttachment
 } = require("./core.js");
 
-const { PythonBridge } = require("./tools.js");
 const { Pipeline } = require("./pipeline.js");
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -57,32 +57,53 @@ async function resolveCode(interaction) {
     throw new Error("Provide code, URL, or file");
 }
 
+// ============================================================
+// الدالة الجديدة والمعدلة بالكامل لاستخدام أداة Node.js
+// ============================================================
 async function handleVMExecution(interaction, code) {
-    await interaction.editReply({ content: "⏳ **WeAreDevs VM Detected.** Running native dumper..." });
+    await interaction.editReply({ content: "⏳ **WeAreDevs Detected.** Running Node.js deobfuscator..." });
 
     const tempDir = path.join(__dirname, `vm_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
     const tempIn = path.join(tempDir, "input.lua");
+    const tempOut = path.join(tempDir, "output.lua");
     fs.writeFileSync(tempIn, code);
 
     try {
-        const result = await PythonBridge.run("wearedevs", tempIn);
+        const result = await new Promise((resolve, reject) => {
+            // استدعاء الأداة الجديدة مباشرة عبر Node.js
+            const proc = spawn("node", [
+                path.join(__dirname, "prometheus-deobf", "bin", "pdeobf.js"),
+                tempIn,
+                "-o", tempOut
+            ], { timeout: 300000 }); // 5 دقائق مهلة
 
-        if (result && result.length > 50 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
-            const cleaned = new Deobfuscator(result, { beautify: true });
-            await cleaned.run();
-            const buffer = Buffer.from(cleaned.code, "utf-8");
-            await interaction.editReply({
-                content: `✅ **Clean code extracted!** (${cleaned.code.split("\n").length} lines)`,
-                files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
+            let stderr = "";
+            proc.stderr.on("data", (d) => stderr += d.toString());
+
+            proc.on("close", (exitCode) => {
+                if (exitCode !== 0) {
+                    return reject(new Error(`Deobfuscator exited (${exitCode}): ${stderr.slice(-500)}`));
+                }
+                if (!fs.existsSync(tempOut)) {
+                    return reject(new Error("Deobfuscator produced no output file."));
+                }
+                resolve(fs.readFileSync(tempOut, "utf-8"));
             });
-        } else {
-            await interaction.editReply({
-                content: `❌ **Dumper returned trace instead of code.** Output length: ${result ? result.length : 0}\nThe tool may have failed. Check logs.`
-            });
+        });
+
+        if (!result || result.length < 50) {
+            return interaction.editReply({ content: `❌ Deobfuscator returned insufficient output (${result?.length || 0} chars).` });
         }
+
+        const buffer = Buffer.from(result, "utf-8");
+        await interaction.editReply({
+            content: `✅ **Deobfuscated successfully!** (${result.split("\n").length} lines)`,
+            files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
+        });
+
     } catch (err) {
-        Logger.log("ERROR", "VM execution failed", { error: err.message });
+        Logger.log("ERROR", "Node.js deobfuscator failed", { error: err.message });
         await interaction.editReply({ content: `❌ **Error:** \`${err.message.slice(0, 500)}\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
