@@ -3,15 +3,19 @@ const path = require("path");
 const fs = require("fs");
 
 class PythonBridge {
+    static stripAnsi(str) {
+        return str.replace(/\x1b\[[0-9;]*m/g, '').replace(/\[\d+m/g, '');
+    }
+
     static async run(tool, inputFile) {
         return new Promise((resolve, reject) => {
             let cmd, args;
-            if (tool === "wearedevs") {
-                cmd = "/opt/venv/bin/python3";
-                args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
-            } else if (tool === "prometheus") {
+            if (tool === "prometheus") {
                 cmd = "/opt/venv/bin/python3";
                 args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
+            } else if (tool === "wearedevs") {
+                cmd = "/opt/venv/bin/python3";
+                args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
             } else if (tool === "moonsec") {
                 cmd = "dotnet";
                 args = [path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
@@ -22,6 +26,7 @@ class PythonBridge {
             const proc = spawn(cmd, args, { timeout: 120000 });
             let stdout = "";
             let stderr = "";
+            
             proc.stdout.on("data", (data) => { stdout += data.toString(); });
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
@@ -34,34 +39,80 @@ class PythonBridge {
                         } catch (e) {
                             reject(new Error("Failed to read Moonsec output"));
                         }
-                    } else if (tool === "wearedevs") {
-                        // البوت الثاني كان يحفظ اللوق في report.txt ثم يشغل trace_to_lua
-                        const dir = path.dirname(inputFile);
-                        const reportPath = path.join(dir, "report.txt");
-                        fs.writeFileSync(reportPath, stdout);
-
-                        const traceToLuaPath = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
-                        if (fs.existsSync(traceToLuaPath)) {
-                            const convertProc = spawn("/opt/venv/bin/python3", [traceToLuaPath, reportPath], { timeout: 60000 });
-                            let finalCode = "";
-                            convertProc.stdout.on("data", (d) => { finalCode += d.toString(); });
-                            convertProc.on("close", (c) => {
-                                if (c === 0 && finalCode.length > 100) {
-                                    resolve(finalCode);
-                                } else {
-                                    // إذا فشل التحويل، نرجع الكود المباشر
-                                    resolve(stdout); 
-                                }
-                            });
-                        } else {
-                            // إذا كان الملف ينزل الكود مباشرة بدون trace_to_lua
-                            resolve(stdout);
-                        }
                     } else {
-                        resolve(stdout);
+                        const dir = path.dirname(inputFile);
+                        const possibleFiles = [
+                            "deobfuscated.lua", 
+                            "output.lua", 
+                            "result.lua", 
+                            "reconstructed.lua",
+                            inputFile.replace(".lua", "_deobfuscated.lua")
+                        ];
+                        
+                        let finalCode = null;
+                        for (const f of possibleFiles) {
+                            const fullPath = path.join(dir, f);
+                            if (fs.existsSync(fullPath)) {
+                                finalCode = fs.readFileSync(fullPath, "utf-8");
+                                if (finalCode.length > 50) break;
+                            }
+                        }
+
+                        if (finalCode && finalCode.length > 50) {
+                            resolve(finalCode);
+                        } else {
+                            resolve(stdout || "Tool finished, but no output file found.");
+                        }
                     }
                 } else {
                     reject(new Error(`Tool Error (${code}): ${stderr.slice(0, 1500)}`));
+                }
+            });
+        });
+    }
+
+    static async runUnluac(luacPath) {
+        return new Promise((resolve, reject) => {
+            const proc = spawn("java", ["-jar", path.join(__dirname, "unluac.jar"), luacPath], { timeout: 60000 });
+            let stdout = "";
+            let stderr = "";
+            proc.stdout.on("data", (data) => { stdout += data.toString(); });
+            proc.stderr.on("data", (data) => { stderr += data.toString(); });
+            proc.on("close", (code) => {
+                if (code === 0) {
+                    resolve(stdout);
+                } else {
+                    reject(new Error(`unluac Error: ${stderr}`));
+                }
+            });
+        });
+    }
+
+    static async runLua51(inputFile, wrapperPath) {
+        return new Promise((resolve, reject) => {
+            const proc = spawn("lua5.1", [wrapperPath, inputFile], { timeout: 25000 });
+            let out = "", err = "";
+            proc.stdout.on("data", d => out += d.toString());
+            proc.stderr.on("data", d => err += d.toString());
+            proc.on("close", (code) => {
+                const captures = [];
+                const re = /\[CAPTURE:([A-Z]+)\]\n([\s\S]*?)\n\[\/CAPTURE\]/g;
+                let m;
+                while ((m = re.exec(out)) !== null) {
+                    captures.push({ kind: m[1], payload: m[2] });
+                }
+                const httpGets = [];
+                const reH = /\[HTTPGET\] (.+)/g;
+                while ((m = reH.exec(out)) !== null) httpGets.push(m[1].trim());
+                const errs = [];
+                const reE = /\[EXEC_ERROR\] (.+)/g;
+                while ((m = reE.exec(out)) !== null) errs.push(m[1].trim());
+                
+                if (captures.length > 0) {
+                    const best = captures.find(c => c.kind === "LOADSTRING" && c.payload.length > 100) || captures[0];
+                    resolve({ captured: best, all: captures, httpGets, errors: errs, raw: out });
+                } else {
+                    resolve({ captured: null, all: [], httpGets, errors: errs, raw: out });
                 }
             });
         });
