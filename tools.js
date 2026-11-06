@@ -9,22 +9,29 @@ class PythonBridge {
 
     static async run(tool, inputFile) {
         return new Promise((resolve, reject) => {
-            let cmd, args;
+            let cmd, args, options;
+            
             if (tool === "prometheus") {
                 cmd = "/opt/venv/bin/python3";
                 args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
+                options = { timeout: 180000 };
             } else if (tool === "wearedevs") {
                 cmd = "/opt/venv/bin/python3";
                 args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
+                // 🔴 هذا هو السر: نعرّف الأداة بمكان lua5.1
+                options = { 
+                    timeout: 180000,
+                    env: { ...process.env, LUA51_EXECUTABLE: "/app/tools/wearedevs/lua_linux/lua5.1" }
+                };
             } else if (tool === "moonsec") {
                 cmd = "dotnet";
                 args = [path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
+                options = { timeout: 180000 };
             } else {
                 return reject(new Error("Unknown tool"));
             }
             
-            // 1. رجعنا الوقت الأصلي 180 ثانية بدون أي قتل قسري عشان نرجع زي أول مرة
-            const proc = spawn(cmd, args, { timeout: 180000 });
+            const proc = spawn(cmd, args, options);
             let stdout = "";
             let stderr = "";
             
@@ -32,6 +39,13 @@ class PythonBridge {
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
             proc.on("close", (code) => {
+                // نفحص أول شي: هل الأداة طلعت الملف النظيف؟
+                const deobfPath = inputFile + ".deobf.lua";
+                if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
+                    return resolve(fs.readFileSync(deobfPath, "utf-8"));
+                }
+
+                // إذا ما لقيناه، نكمل الطريقة العادية
                 if (code === 0 || fs.existsSync(inputFile + ".report.txt")) {
                     if (tool === "moonsec") {
                         try {
@@ -50,17 +64,11 @@ class PythonBridge {
                         step2.stderr.on("data", (d) => err2 += d.toString());
                         
                         step2.on("close", (c2) => {
-                            const finalOut = this.stripAnsi(out2);
-                            
-                            // 2. هنا الفحص الذكي: إذا طلع تقرير خام أو كلمة Saved، نقرأ الملف النظيف
-                            if (finalOut.includes("local Constants") || finalOut.includes("Saved ") || finalOut.trim().length < 50) {
-                                const deobfPath = inputFile + ".deobf.lua";
-                                if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
-                                    return resolve(fs.readFileSync(deobfPath, "utf-8"));
-                                }
+                            // بعد الأداة الثانية، نفحص الملف النظيف مرة ثانية
+                            if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
+                                return resolve(fs.readFileSync(deobfPath, "utf-8"));
                             }
-
-                            if (c2 === 0) resolve(finalOut);
+                            if (c2 === 0) resolve(this.stripAnsi(out2));
                             else reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
                         });
                     } else {
