@@ -6,10 +6,8 @@ const { Deobfuscator } = require("./core.js");
 class Pipeline {
     static isCleanCode(code) {
         if (!code || typeof code !== "string") return false;
+        if (code.includes("zy28uHLFUuAPgKtOc0AcRNq") || code.includes("wearedevs.net/obfuscator")) return false;
         if (code.includes("UNPACK CALLED")) return false;
-        if (code.includes("CAPTURED CHUNK")) return false;
-        if (code.includes("ACCESSED (NIL)")) return false;
-        if (code.includes("local Constants =")) return false;
         if (code.startsWith("BYTECODE_HEX:")) return false;
         if (code.includes("[SANDBOX_ERROR]")) return false;
         
@@ -42,23 +40,23 @@ class Pipeline {
         const jsDeobf = new Deobfuscator(currentCode, { beautify: false });
         await jsDeobf.run();
         currentCode = jsDeobf.code;
-        
-        if (jsDeobf.stats.mathSimplified > 0 || jsDeobf.stats.stringsDecoded > 0) {
-            usedTools.push("JS-Engine-First");
-        }
 
         if (this.isCleanCode(currentCode)) {
             finalCode = currentCode;
-            usedTools.push("JS-Clean");
+            usedTools.push("JS-Engine");
         }
 
         if (!finalCode) {
-            let tool = null;
-            if (detectionName.includes("WeAreDevs")) tool = "wearedevs";
-            else if (detectionName.includes("Moonsec")) tool = "moonsec";
-            else if (detectionName.includes("Prometheus")) tool = "prometheus";
+            let toolsToTry = [];
+            if (detectionName.includes("WeAreDevs")) {
+                toolsToTry = ["wearedevs", "wearedevs2"];
+            } else if (detectionName.includes("Moonsec")) {
+                toolsToTry = ["moonsec"];
+            } else if (detectionName.includes("Prometheus")) {
+                toolsToTry = ["prometheus"];
+            }
 
-            if (tool) {
+            for (const tool of toolsToTry) {
                 try {
                     const tempIn = path.join(tempDir, `chain_${Date.now()}_${tool}.lua`);
                     fs.writeFileSync(tempIn, currentCode);
@@ -69,11 +67,18 @@ class Pipeline {
                         isBytecode = true;
                         finalCode = result;
                         usedTools.push(tool);
+                        break;
                     } else {
                         currentCode = result;
                         usedTools.push(tool);
+                        if (this.isCleanCode(currentCode)) {
+                            finalCode = currentCode;
+                            break;
+                        }
                     }
-                } catch (e) {}
+                } catch (e) {
+                    continue;
+                }
             }
         }
 
