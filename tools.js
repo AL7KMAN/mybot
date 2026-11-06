@@ -38,6 +38,21 @@ class PythonBridge {
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
             proc.on("close", (code) => {
+                // 🚀 السر السحري: إذا طلع لنا مسار "Saved"، نروح نقرأ الملف فوراً
+                if (stdout.includes("Saved ")) {
+                    const savedPath = stdout.split("Saved ")[1].trim();
+                    if (fs.existsSync(savedPath)) {
+                        return resolve(fs.readFileSync(savedPath, "utf-8"));
+                    }
+                }
+
+                // أو إذا كان الملف معروف باسمه
+                const deobfPath = inputFile + ".deobf.lua";
+                if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
+                    return resolve(fs.readFileSync(deobfPath, "utf-8"));
+                }
+
+                // الخطة البديلة: تشغيل الأداة الثانية
                 if (code === 0 || fs.existsSync(inputFile + ".report.txt")) {
                     if (tool === "moonsec") {
                         try {
@@ -49,7 +64,6 @@ class PythonBridge {
                     } else if (tool === "wearedevs") {
                         const traceScript = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
                         const reportPath = inputFile + ".report.txt";
-                        const deobfPath = inputFile + ".deobf.lua"; // 🔴 المسار السحري
                         
                         const step2 = spawn("/opt/venv/bin/python3", [traceScript, reportPath], { timeout: 60000 });
                         let out2 = "", err2 = "";
@@ -57,24 +71,16 @@ class PythonBridge {
                         step2.stderr.on("data", (d) => err2 += d.toString());
                         
                         step2.on("close", (c2) => {
-                            // 🔴 هنا السر: نفحص إذا الملف النظيف موجود ونقرأه ونرسله
                             if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
                                 return resolve(fs.readFileSync(deobfPath, "utf-8"));
                             }
-
                             const finalOut = this.stripAnsi(out2);
                             if (c2 === 0) resolve(finalOut);
                             else reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
                         });
                     } else {
                         const dir = path.dirname(inputFile);
-                        const possibleFiles = [
-                            "deobfuscated.lua", 
-                            "output.lua", 
-                            "result.lua", 
-                            "reconstructed.lua",
-                            inputFile.replace(".lua", "_deobfuscated.lua")
-                        ];
+                        const possibleFiles = ["deobfuscated.lua", "output.lua", "result.lua", "reconstructed.lua", inputFile.replace(".lua", "_deobfuscated.lua")];
                         
                         let finalCode = null;
                         for (const f of possibleFiles) {
@@ -85,11 +91,8 @@ class PythonBridge {
                             }
                         }
 
-                        if (finalCode && finalCode.length > 50) {
-                            resolve(finalCode);
-                        } else {
-                            resolve(stdout || "Tool finished, but no output file found.");
-                        }
+                        if (finalCode && finalCode.length > 50) resolve(finalCode);
+                        else resolve(stdout || "Tool finished, but no output file found.");
                     }
                 } else {
                     reject(new Error(`Tool Error (${code}): ${stderr.slice(0, 1500)}`));
@@ -106,11 +109,8 @@ class PythonBridge {
             proc.stdout.on("data", (data) => { stdout += data.toString(); });
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             proc.on("close", (code) => {
-                if (code === 0) {
-                    resolve(stdout);
-                } else {
-                    reject(new Error(`unluac Error: ${stderr}`));
-                }
+                if (code === 0) resolve(stdout);
+                else reject(new Error(`unluac Error: ${stderr}`));
             });
         });
     }
@@ -125,9 +125,7 @@ class PythonBridge {
                 const captures = [];
                 const re = /\[CAPTURE:([A-Z]+)\]\n([\s\S]*?)\n\[\/CAPTURE\]/g;
                 let m;
-                while ((m = re.exec(out)) !== null) {
-                    captures.push({ kind: m[1], payload: m[2] });
-                }
+                while ((m = re.exec(out)) !== null) captures.push({ kind: m[1], payload: m[2] });
                 const httpGets = [];
                 const reH = /\[HTTPGET\] (.+)/g;
                 while ((m = reH.exec(out)) !== null) httpGets.push(m[1].trim());
