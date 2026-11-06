@@ -7,9 +7,8 @@ class PythonBridge {
         return new Promise((resolve, reject) => {
             if (tool === "wearedevs") {
                 const dir = path.dirname(inputFile);
-                const reportPath = path.join(dir, "report.txt");
-                const outputPath = path.join(dir, "deobfuscated.lua");
                 const luaDir = path.join(__dirname, "tools/wearedevs");
+                const reportPath = path.join(dir, "report.txt");
 
                 const step1 = spawn("/opt/venv/bin/python3", [
                     path.join(luaDir, "deobfuscator.py"),
@@ -22,13 +21,9 @@ class PythonBridge {
                 step1.stderr.on("data", (d) => s1err += d.toString());
 
                 step1.on("close", (c1) => {
-                    const combined1 = s1out + "\n" + s1err;
-
-                    if (combined1.length < 100) {
-                        return reject(new Error(`Dumper failed (Code ${c1}). Out: ${s1out.slice(0,200)} | Err: ${s1err.slice(0,300)}`));
+                    if (!fs.existsSync(reportPath)) {
+                        return reject(new Error(`Dumper failed. No report.txt generated. Out: ${s1out.slice(0,100)} | Err: ${s1err.slice(0,100)}`));
                     }
-
-                    fs.writeFileSync(reportPath, combined1);
 
                     const traceToLua = path.join(luaDir, "trace_to_lua.py");
                     if (!fs.existsSync(traceToLua)) {
@@ -50,7 +45,6 @@ class PythonBridge {
                         }
 
                         const files = [
-                            outputPath,
                             path.join(dir, "deobfuscated.lua"),
                             path.join(luaDir, "deobfuscated.lua"),
                             path.join(process.cwd(), "deobfuscated.lua"),
