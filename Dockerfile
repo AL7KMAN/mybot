@@ -31,6 +31,7 @@ RUN /opt/venv/bin/pip install -r requirements.txt
 RUN mkdir -p tools && \
     git clone https://github.com/0x251/Prometheus-Deobfuscator.git tools/prometheus && \
     git clone https://github.com/hutaoshusband/Prometheus-WeAre-Devs-Dumper.git tools/wearedevs && \
+    git clone https://github.com/mokaEZF/lua-deobfuscator-bot2.git tools/wearedevs2 && \
     git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec && \
     cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
 
