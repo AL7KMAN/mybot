@@ -68,7 +68,7 @@ async function handleVMExecution(interaction, code) {
     try {
         const result = await PythonBridge.run("wearedevs", tempIn);
         
-        if (result && (result.includes("game:GetService") || result.includes("workspace") || result.includes("Instance.new")) && !result.includes("Reversing VM Expression")) {
+        if (result && result.length < 50000 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
             const finalDeobf = new Deobfuscator(result, { beautify: true });
             await finalDeobf.run();
             
@@ -78,9 +78,9 @@ async function handleVMExecution(interaction, code) {
                 files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
             });
         } else {
-            const report = `=== DIAGNOSTICS ===\n\nOutput:\n${result ? result.slice(0, 5000) : 'None'}`;
+            const report = `=== DIAGNOSTICS ===\n\nTrace conversion failed. Raw output length: ${result ? result.length : 0} bytes.`;
             await interaction.editReply({
-                content: "❌ **Failed to extract clean code.** Diagnostics attached:",
+                content: "❌ **Failed to extract clean code.** Tool returned raw trace instead of clean Lua. Diagnostics:",
                 files: [new AttachmentBuilder(Buffer.from(report, "utf-8"), { name: "diagnostics.txt" })]
             });
         }
