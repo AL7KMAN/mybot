@@ -42,14 +42,26 @@ class PythonBridge {
                     } else if (tool === "wearedevs") {
                         const traceScript = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
                         const reportPath = inputFile + ".report.txt";
+                        const deobfPath = inputFile + ".deobf.lua"; // المسار اللي حفظت فيه الأداة
                         
                         const step2 = spawn("/opt/venv/bin/python3", [traceScript, reportPath], { timeout: 60000 });
                         let out2 = "", err2 = "";
                         step2.stdout.on("data", (d) => out2 += d.toString());
                         step2.stderr.on("data", (d) => err2 += d.toString());
+                        
                         step2.on("close", (c2) => {
-                            if (c2 === 0) resolve(this.stripAnsi(out2));
-                            else reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
+                            if (c2 === 0) {
+                                // أول شي: ندور على الملف اللي حفظته الأداة
+                                if (fs.existsSync(deobfPath)) {
+                                    resolve(fs.readFileSync(deobfPath, "utf-8"));
+                                } 
+                                // ثاني شي: إذا ما لقيناه، نرجع للكود اللي طلع في الشاشة
+                                else {
+                                    resolve(this.stripAnsi(out2));
+                                }
+                            } else {
+                                reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
+                            }
                         });
                     } else {
                         const dir = path.dirname(inputFile);
