@@ -14,7 +14,6 @@ const {
     readAttachment
 } = require('./core.js');
 
-const { LuaSandbox } = require('./sandbox.js');
 const { PythonBridge } = require('./tools.js');
 const { Pipeline } = require('./pipeline.js');
 
@@ -59,7 +58,7 @@ async function resolveCode(interaction) {
 }
 
 async function handleVMExecution(interaction, code) {
-    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Native Dumper..." });
+    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Native Engine..." });
     
     const tempDir = path.join(__dirname, `vm_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
@@ -69,33 +68,22 @@ async function handleVMExecution(interaction, code) {
     try {
         const result = await PythonBridge.run("wearedevs", tempIn);
         
-        if (result && result.length > 100 && !result.includes("UNPACK CALLED") && !result.includes("CAPTURED CHUNK")) {
-            const buffer = Buffer.from(result, "utf-8");
-            await interaction.editReply({
-                content: "✅ **Extracted clean payload via Prometheus Dumper!**",
-                files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
-            });
-            return;
-        }
-
-        const sandboxResult = await LuaSandbox.run(code);
-        if (sandboxResult.captures && sandboxResult.captures.length > 0) {
-            const bestCapture = sandboxResult.captures.reduce((a, b) => a.length > b.length ? a : b, "");
-            const finalDeobf = new Deobfuscator(bestCapture, { beautify: true });
+        if (result && result.length > 100 && result.includes("game:GetService") && !result.includes("UNPACK CALLED")) {
+            const finalDeobf = new Deobfuscator(result, { beautify: true });
             await finalDeobf.run();
+            
             const buffer = Buffer.from(finalDeobf.code, "utf-8");
             await interaction.editReply({
-                content: `✅ **Extracted payload via Wasmoon Sandbox!**`,
+                content: "✅ **Extracted clean payload via Prometheus!**",
                 files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
             });
-            return;
+        } else {
+            const report = `=== DIAGNOSTICS ===\n\nOutput:\n${result ? result.slice(0, 5000) : 'None'}`;
+            await interaction.editReply({
+                content: "❌ **Failed to extract clean code.** Diagnostics attached:",
+                files: [new AttachmentBuilder(Buffer.from(report, "utf-8"), { name: "diagnostics.txt" })]
+            });
         }
-
-        const report = `=== DIAGNOSTICS ===\n\nOutput:\n${result ? result.slice(0, 3000) : 'None'}\n\nSandbox Error:\n${sandboxResult.error || 'None'}`;
-        await interaction.editReply({
-            content: "❌ **Failed to extract clean code.** Diagnostics attached:",
-            files: [new AttachmentBuilder(Buffer.from(report, "utf-8"), { name: "diagnostics.txt" })]
-        });
     } catch (err) {
         await interaction.editReply({ content: `❌ **Error:** \`${err.message}\`` });
     } finally {
