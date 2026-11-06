@@ -58,7 +58,7 @@ async function resolveCode(interaction) {
 }
 
 async function handleVMExecution(interaction, code) {
-    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Native Engine..." });
+    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Engine (Trace -> Lua)..." });
     
     const tempDir = path.join(__dirname, `vm_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
