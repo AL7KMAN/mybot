@@ -10,15 +10,13 @@ class PythonBridge {
                 const reportPath = path.join(dir, "report.txt");
                 const outputPath = path.join(dir, "deobfuscated.lua");
                 
-                const step1 = spawn("/opt/venv/bin/python3", [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile], { timeout: 120000 });
-                let step1Output = "";
-                let step1Error = "";
+                const step1 = spawn("/opt/venv/bin/python3", [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile], { timeout: 300000 });
+                let stdout = "";
                 
-                step1.stdout.on("data", (d) => step1Output += d.toString());
-                step1.stderr.on("data", (d) => step1Error += d.toString());
+                step1.stdout.on("data", (d) => stdout += d.toString());
                 
-                step1.on("close", (code) => {
-                    fs.writeFileSync(reportPath, step1Output);
+                step1.on("close", () => {
+                    fs.writeFileSync(reportPath, stdout);
                     
                     const traceToLuaPath = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
                     if (!fs.existsSync(traceToLuaPath)) {
@@ -26,22 +24,22 @@ class PythonBridge {
                     }
                     
                     const step2 = spawn("/opt/venv/bin/python3", [traceToLuaPath, reportPath], { timeout: 60000 });
-                    let step2Output = "";
-                    let step2Error = "";
+                    let convertedCode = "";
                     
-                    step2.stdout.on("data", (d) => step2Output += d.toString());
-                    step2.stderr.on("data", (d) => step2Error += d.toString());
+                    step2.stdout.on("data", (d) => convertedCode += d.toString());
                     
-                    step2.on("close", (code2) => {
-                        if (code2 === 0 && fs.existsSync(outputPath)) {
-                            resolve(fs.readFileSync(outputPath, "utf-8"));
-                        } else {
-                            reject(new Error(`Converter failed (Code ${code2}). STDERR: ${step2Error.slice(0, 500)}`));
+                    step2.on("close", () => {
+                        if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10) {
+                            return resolve(fs.readFileSync(outputPath, "utf-8"));
                         }
+                        if (convertedCode && convertedCode.length > 10) {
+                            return resolve(convertedCode);
+                        }
+                        reject(new Error("Converter failed to produce clean code."));
                     });
                 });
             } else if (tool === "prometheus") {
-                const proc = spawn("/opt/venv/bin/python3", [path.join(__dirname, "tools/prometheus/pol.py"), inputFile], { timeout: 120000 });
+                const proc = spawn("/opt/venv/bin/python3", [path.join(__dirname, "tools/prometheus/pol.py"), inputFile], { timeout: 180000 });
                 let out = "";
                 proc.stdout.on("data", (d) => out += d.toString());
                 proc.on("close", () => {
