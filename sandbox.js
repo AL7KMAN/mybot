@@ -4,69 +4,116 @@ class LuaSandbox {
     static async run(code) {
         const factory = new LuaFactory();
         const lua = await factory.createEngine();
+        const captures = [];
         const logs = [];
+        let sandboxError = null;
+
         try {
-            const processedCode = code.replace(/0b([01]+)/g, (m, b) => parseInt(b, 2).toString());
+            const processedCode = code.replace(/0b([01]+)/g, (match, bin) => parseInt(bin, 2).toString());
             
-            const fakeInst = (n) => ({
-                ClassName: n, Name: n, Parent: null, Visible: true,
-                Position: {X:0,Y:0,Z:0}, Size: {X:0,Y:0,Z:0},
-                FindFirstChild: function() { return this; },
-                WaitForChild: function() { return this; },
-                FindFirstChildOfClass: function() { return this; },
-                GetChildren: function() { return []; },
-                GetDescendants: function() { return []; },
-                IsA: function() { return true; },
-                Destroy: function() {},
-                Clone: function() { return this; },
-                SetAttribute: function() {},
-                GetAttribute: function() { return null; },
-                Connect: function() { return { Disconnect: function() {} }; }
+            const fakeInstance = (className) => new Proxy({}, {
+                get: (target, prop) => {
+                    if (prop === 'ClassName' || prop === 'Name') return className;
+                    if (prop === 'Parent') return null;
+                    if (prop === 'IsA') return () => true;
+                    if (prop === 'FindFirstChild' || prop === 'WaitForChild' || prop === 'FindFirstChildOfClass') return () => fakeInstance(className);
+                    if (prop === 'GetChildren' || prop === 'GetDescendants') return () => [];
+                    if (prop === 'Connect') return () => ({ Disconnect: () => {} });
+                    if (prop === 'Destroy' || prop === 'SetAttribute') return () => {};
+                    if (prop === 'GetAttribute') return () => null;
+                    if (prop === 'Clone') return () => fakeInstance(className);
+                    if (prop === 'HttpGet') return (url) => { logs.push(`[HTTPGET] ${url}`); return ""; };
+                    return fakeInstance(className);
+                }
             });
 
-            const env = {
-                game: {
-                    GetService: (n) => { logs.push(`[SERVICE] ${n}`); return fakeInst(n); },
-                    HttpGet: (u) => { logs.push(`[HTTPGET] ${u}`); return "-- block"; },
-                    IsLoaded: () => true, PlaceId: 123456, JobId: "sbx"
-                },
-                workspace: fakeInst("Workspace"),
-                script: fakeInst("Script"),
-                Instance: { new: (t) => fakeInst(t) },
-                loadstring: (s) => { logs.push(`\n[CAPTURE:LOADSTRING]\n${s}\n[/CAPTURE]\n`); return () => {}; },
-                load: (s) => { logs.push(`\n[CAPTURE:LOADSTRING]\n${s}\n[/CAPTURE]\n`); return () => {}; },
-                require: (id) => { logs.push(`[CAPTURE:REQUIRE] ${id}`); return {}; },
-                print: (...a) => logs.push(`[PRINT] ${a.join(' ')}`),
-                warn: (...a) => logs.push(`[WARN] ${a.join(' ')}`),
-                error: (...a) => { logs.push(`[ERROR] ${a.join(' ')}`); },
-                task: { wait: () => {}, spawn: (f) => { try { f(); } catch(e){} }, delay: (t, f) => {} },
-                getfenv: () => env, setfenv: (f) => f,
-                getgenv: () => env,
-                newproxy: () => ({}), setmetatable: (t) => t, getmetatable: () => null,
-                rawget: (t, k) => t ? t[k] : null, rawset: (t, k, v) => { if (t) t[k] = v; return t; },
-                unpack: (t) => Object.values(t || {}),
-                typeof: (v) => typeof v === "object" ? "Instance" : typeof v,
-                wait: () => {}, tick: () => Date.now(), time: () => 0,
-                Vector3: { new: (x,y,z) => ({X:x,Y:y,Z:z}) },
-                Vector2: { new: (x,y) => ({X:x,Y:y}) },
-                CFrame: { new: () => ({}) },
-                UDim2: { new: (xs,xo,ys,yo) => ({X:{Scale:xs,Offset:xo},Y:{Scale:ys,Offset:yo}}) },
-                UDim: { new: (s,o) => ({Scale:s,Offset:o}) },
-                Color3: { fromRGB: (r,g,b) => ({R:r,G:g,B:b}), new: (r,g,b) => ({R:r,G:g,B:b}) },
-                Enum: new Proxy({}, { get: () => new Proxy({}, { get: (t,k) => k }) })
+            const safePush = (str) => {
+                if (str && typeof str === 'string' && str.trim().length > 0) {
+                    logs.push(str);
+                }
             };
+
+            const fakeEnv = {
+                game: fakeInstance("DataModel"),
+                workspace: fakeInstance("Workspace"),
+                script: fakeInstance("Script"),
+                plugin: fakeInstance("Plugin"),
+                shared: {},
+                Instance: { new: (type) => fakeInstance(type) },
+                
+                loadstring: (src) => {
+                    if (typeof src === 'string') captures.push(src);
+                    return () => {};
+                },
+                load: (src) => {
+                    if (typeof src === 'string') captures.push(src);
+                    return () => {};
+                },
+                require: (id) => {
+                    logs.push(`[REQUIRE] ${id}`);
+                    return fakeInstance("ModuleScript");
+                },
+                
+                print: (...args) => { try { safePush(`[PRINT] ${args.join(' ')}`); } catch(e){} },
+                warn: (...args) => { try { safePush(`[WARN] ${args.join(' ')}`); } catch(e){} },
+                error: (...args) => { try { safePush(`[ERROR] ${args.join(' ')}`); } catch(e){} },
+                
+                getfenv: () => fakeEnv,
+                setfenv: (f, env) => f,
+                getgenv: () => fakeEnv,
+                newproxy: (val) => ({}),
+                setmetatable: (t, mt) => t,
+                getmetatable: (t) => null,
+                rawget: (t, k) => (t && t[k]) ? t[k] : null,
+                rawset: (t, k, v) => { if (t) t[k] = v; return t; },
+                rawequal: (a, b) => a === b,
+                unpack: (t, i, j) => Object.values(t || {}).slice(i || 0, j || undefined),
+                select: (n, ...args) => {
+                    if (n === '#') return args.length;
+                    return args[n - 1];
+                },
+                
+                typeof: (v) => {
+                    if (v === null) return "nil";
+                    if (Array.isArray(v)) return "table";
+                    return typeof v === "object" ? "Instance" : typeof v;
+                },
+                
+                task: { wait: () => {}, spawn: (f) => { try { f(); } catch(e){} }, delay: (t, f) => {} },
+                wait: () => {}, tick: () => Date.now(), time: () => Math.floor(Date.now() / 1000),
+                
+                Vector3: { new: (x, y, z) => ({ X: x||0, Y: y||0, Z: z||0 }) },
+                Vector2: { new: (x, y) => ({ X: x||0, Y: y||0 }) },
+                CFrame: { new: (...args) => ({}) },
+                UDim2: { new: (xs, xo, ys, yo) => ({ X: { Scale: xs||0, Offset: xo||0 }, Y: { Scale: ys||0, Offset: yo||0 } }) },
+                UDim: { new: (s, o) => ({ Scale: s||0, Offset: o||0 }) },
+                Color3: { fromRGB: (r, g, b) => ({ R: r||0, G: g||0, B: b||0 }), new: (r, g, b) => ({ R: r||0, G: g||0, B: b||0 }) },
+                Enum: new Proxy({}, { get: () => new Proxy({}, { get: (t, k) => k }) })
+            };
+
+            for (const [key, val] of Object.entries(fakeEnv)) {
+                try { lua.global.set(key, val); } catch (e) {}
+            }
+
+            const execute = lua.doString(processedCode);
             
-            for (const [k, v] of Object.entries(env)) { try { lua.global.set(k, v); } catch(e) {} }
+            const timeout = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error("SANDBOX_TIMEOUT (Infinite Loop Detected)")), 6000)
+            );
             
-            const exec = lua.doString(processedCode);
-            const timer = new Promise((_, rej) => setTimeout(() => rej(new Error("TIMEOUT")), 5000));
-            await Promise.race([exec, timer]);
-            return logs.join('\n') || "Sandbox ran, no logs captured.";
+            await Promise.race([execute, timeout]);
+
         } catch (e) {
-            return logs.join('\n') + `\n[SANDBOX_ERROR] ${e.message}`;
+            sandboxError = e.message;
         } finally {
             try { lua.global.close(); } catch(e) {}
         }
+
+        return {
+            captures: captures.filter(c => c && c.length > 30),
+            logs: logs.join('\n'),
+            error: sandboxError
+        };
     }
 }
 
