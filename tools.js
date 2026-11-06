@@ -6,12 +6,12 @@ class PythonBridge {
     static async run(tool, inputFile) {
         return new Promise((resolve, reject) => {
             let cmd, args;
-            if (tool === "prometheus") {
-                cmd = "/opt/venv/bin/python3";
-                args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
-            } else if (tool === "wearedevs") {
+            if (tool === "wearedevs") {
                 cmd = "/opt/venv/bin/python3";
                 args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
+            } else if (tool === "prometheus") {
+                cmd = "/opt/venv/bin/python3";
+                args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
             } else if (tool === "moonsec") {
                 cmd = "dotnet";
                 args = [path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
@@ -34,30 +34,31 @@ class PythonBridge {
                         } catch (e) {
                             reject(new Error("Failed to read Moonsec output"));
                         }
-                    } else {
+                    } else if (tool === "wearedevs") {
+                        // البوت الثاني كان يحفظ اللوق في report.txt ثم يشغل trace_to_lua
                         const dir = path.dirname(inputFile);
-                        const possibleFiles = [
-                            "deobfuscated.lua", 
-                            "output.lua", 
-                            "result.lua", 
-                            "reconstructed.lua",
-                            inputFile.replace(".lua", "_deobfuscated.lua")
-                        ];
-                        
-                        let finalCode = null;
-                        for (const f of possibleFiles) {
-                            const fullPath = path.join(dir, f);
-                            if (fs.existsSync(fullPath)) {
-                                finalCode = fs.readFileSync(fullPath, "utf-8");
-                                if (finalCode.length > 50) break;
-                            }
-                        }
+                        const reportPath = path.join(dir, "report.txt");
+                        fs.writeFileSync(reportPath, stdout);
 
-                        if (finalCode && finalCode.length > 50) {
-                            resolve(finalCode);
+                        const traceToLuaPath = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
+                        if (fs.existsSync(traceToLuaPath)) {
+                            const convertProc = spawn("/opt/venv/bin/python3", [traceToLuaPath, reportPath], { timeout: 60000 });
+                            let finalCode = "";
+                            convertProc.stdout.on("data", (d) => { finalCode += d.toString(); });
+                            convertProc.on("close", (c) => {
+                                if (c === 0 && finalCode.length > 100) {
+                                    resolve(finalCode);
+                                } else {
+                                    // إذا فشل التحويل، نرجع الكود المباشر
+                                    resolve(stdout); 
+                                }
+                            });
                         } else {
-                            resolve(stdout || "Tool finished, but no output file found.");
+                            // إذا كان الملف ينزل الكود مباشرة بدون trace_to_lua
+                            resolve(stdout);
                         }
+                    } else {
+                        resolve(stdout);
                     }
                 } else {
                     reject(new Error(`Tool Error (${code}): ${stderr.slice(0, 1500)}`));
