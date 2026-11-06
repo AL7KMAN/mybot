@@ -38,13 +38,12 @@ class PythonBridge {
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
             proc.on("close", (code) => {
-                // 1. الفحص الذكي: إذا الأداة حفظت الملف النظيف مباشرة، نقرأه ونرسله!
+                // 🔴 الفحص السحري: إذا لقينا الملف النظيف، نأخذه ونكنسل الأداة الثانية
                 const deobfPath = inputFile + ".deobf.lua";
                 if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
                     return resolve(fs.readFileSync(deobfPath, "utf-8"));
                 }
 
-                // 2. الخطة العادية إذا ما لقيناه
                 if (code === 0 || fs.existsSync(inputFile + ".report.txt")) {
                     if (tool === "moonsec") {
                         try {
@@ -103,11 +102,8 @@ class PythonBridge {
             proc.stdout.on("data", (data) => { stdout += data.toString(); });
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             proc.on("close", (code) => {
-                if (code === 0) {
-                    resolve(stdout);
-                } else {
-                    reject(new Error(`unluac Error: ${stderr}`));
-                }
+                if (code === 0) resolve(stdout);
+                else reject(new Error(`unluac Error: ${stderr}`));
             });
         });
     }
