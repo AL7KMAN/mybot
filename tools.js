@@ -17,8 +17,8 @@ class PythonBridge {
                 options = { timeout: 180000 };
             } else if (tool === "wearedevs") {
                 cmd = "/opt/venv/bin/python3";
-                args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
-                // 🔴 هذا هو السر: نعرّف الأداة بمكان lua5.1
+                // هنا السر: نحدد 10 دورات فقط عشان ما يعلق في اللوب اللانهائي
+                args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile, "--max-waits", "10"];
                 options = { 
                     timeout: 180000,
                     env: { ...process.env, LUA51_EXECUTABLE: "/app/tools/wearedevs/lua_linux/lua5.1" }
@@ -39,13 +39,6 @@ class PythonBridge {
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
             proc.on("close", (code) => {
-                // نفحص أول شي: هل الأداة طلعت الملف النظيف؟
-                const deobfPath = inputFile + ".deobf.lua";
-                if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
-                    return resolve(fs.readFileSync(deobfPath, "utf-8"));
-                }
-
-                // إذا ما لقيناه، نكمل الطريقة العادية
                 if (code === 0 || fs.existsSync(inputFile + ".report.txt")) {
                     if (tool === "moonsec") {
                         try {
@@ -64,11 +57,8 @@ class PythonBridge {
                         step2.stderr.on("data", (d) => err2 += d.toString());
                         
                         step2.on("close", (c2) => {
-                            // بعد الأداة الثانية، نفحص الملف النظيف مرة ثانية
-                            if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
-                                return resolve(fs.readFileSync(deobfPath, "utf-8"));
-                            }
-                            if (c2 === 0) resolve(this.stripAnsi(out2));
+                            const finalOut = this.stripAnsi(out2);
+                            if (c2 === 0) resolve(finalOut);
                             else reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
                         });
                     } else {
