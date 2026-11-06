@@ -58,7 +58,7 @@ async function resolveCode(interaction) {
 }
 
 async function handleVMExecution(interaction, code) {
-    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Engine..." });
+    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Engine (Trace -> Lua)..." });
     
     const tempDir = path.join(__dirname, `vm_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
@@ -68,7 +68,7 @@ async function handleVMExecution(interaction, code) {
     try {
         const result = await PythonBridge.run("wearedevs", tempIn);
         
-        if (result && result.length < 50000 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
+        if (result && result.length > 50 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
             const finalDeobf = new Deobfuscator(result, { beautify: true });
             await finalDeobf.run();
             
@@ -78,9 +78,9 @@ async function handleVMExecution(interaction, code) {
                 files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
             });
         } else {
-            const report = `=== DIAGNOSTICS ===\n\nTrace conversion failed. Raw output length: ${result ? result.length : 0} bytes.`;
+            const report = `=== DIAGNOSTICS ===\n\nTrace conversion failed or returned raw trace. Output length: ${result ? result.length : 0}`;
             await interaction.editReply({
-                content: "❌ **Failed to extract clean code.** Tool returned raw trace instead of clean Lua. Diagnostics:",
+                content: "❌ **Failed to extract clean code.** Diagnostics attached:",
                 files: [new AttachmentBuilder(Buffer.from(report, "utf-8"), { name: "diagnostics.txt" })]
             });
         }
