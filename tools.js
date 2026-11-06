@@ -17,7 +17,6 @@ class PythonBridge {
                 options = { timeout: 180000 };
             } else if (tool === "wearedevs") {
                 cmd = "/opt/venv/bin/python3";
-                // هنا السر: نحدد 10 دورات فقط عشان ما يعلق في اللوب اللانهائي
                 args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile, "--max-waits", "10"];
                 options = { 
                     timeout: 180000,
@@ -50,6 +49,7 @@ class PythonBridge {
                     } else if (tool === "wearedevs") {
                         const traceScript = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
                         const reportPath = inputFile + ".report.txt";
+                        const deobfPath = inputFile + ".deobf.lua"; // 🔴 المسار السحري
                         
                         const step2 = spawn("/opt/venv/bin/python3", [traceScript, reportPath], { timeout: 60000 });
                         let out2 = "", err2 = "";
@@ -57,6 +57,11 @@ class PythonBridge {
                         step2.stderr.on("data", (d) => err2 += d.toString());
                         
                         step2.on("close", (c2) => {
+                            // 🔴 هنا السر: نفحص إذا الملف النظيف موجود ونقرأه ونرسله
+                            if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
+                                return resolve(fs.readFileSync(deobfPath, "utf-8"));
+                            }
+
                             const finalOut = this.stripAnsi(out2);
                             if (c2 === 0) resolve(finalOut);
                             else reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
