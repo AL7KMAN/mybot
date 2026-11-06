@@ -19,6 +19,12 @@ COPY . .
 
 RUN npm install
 
+# ============================================================
+# إضافة الأداة الجديدة (Node.js) وتثبيت تبعياتها
+# ============================================================
+RUN git clone https://github.com/prostone4/Prometheus-Deobfuscator.git /app/prometheus-deobf
+RUN cd /app/prometheus-deobf && npm install
+
 RUN python3.12 -m venv /opt/venv
 RUN /opt/venv/bin/pip install -r requirements.txt
 
