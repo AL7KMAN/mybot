@@ -8,6 +8,7 @@ class PythonBridge {
             if (tool === "wearedevs") {
                 const dir = path.dirname(inputFile);
                 const reportPath = path.join(dir, "report.txt");
+                const outputPath = path.join(dir, "deobfuscated.lua");
                 
                 const step1 = spawn("/opt/venv/bin/python3", [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile], { timeout: 120000 });
                 let step1Output = "";
@@ -17,29 +18,25 @@ class PythonBridge {
                 step1.stderr.on("data", (d) => step1Error += d.toString());
                 
                 step1.on("close", (code) => {
-                    if (code !== 0 && !step1Output && step1Error) {
-                        return reject(new Error(`Deobfuscator error: ${step1Error.slice(0, 1000)}`));
-                    }
-                    
                     fs.writeFileSync(reportPath, step1Output);
                     
                     const traceToLuaPath = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
                     if (!fs.existsSync(traceToLuaPath)) {
-                        return resolve(step1Output);
+                        return reject(new Error("trace_to_lua.py not found"));
                     }
                     
                     const step2 = spawn("/opt/venv/bin/python3", [traceToLuaPath, reportPath], { timeout: 60000 });
                     let step2Output = "";
-                    let step2Error = "";
                     
                     step2.stdout.on("data", (d) => step2Output += d.toString());
-                    step2.stderr.on("data", (d) => step2Error += d.toString());
                     
                     step2.on("close", (code2) => {
-                        if (code2 === 0 && step2Output.length > 50) {
+                        if (fs.existsSync(outputPath)) {
+                            resolve(fs.readFileSync(outputPath, "utf-8"));
+                        } else if (step2Output.length > 50 && !step2Output.includes("local Constants")) {
                             resolve(step2Output);
                         } else {
-                            resolve(step1Output);
+                            reject(new Error("Trace conversion failed, raw trace rejected."));
                         }
                     });
                 });
