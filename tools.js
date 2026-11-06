@@ -23,7 +23,8 @@ class PythonBridge {
                 return reject(new Error("Unknown tool"));
             }
             
-            const proc = spawn(cmd, args, { timeout: 180000 });
+            // هنا التعديل: صرنا نعطيها 15 ثانية بس بدل 180 ثانية عشان ما تعلق في اللوب
+            const proc = spawn(cmd, args, { timeout: 15000 });
             let stdout = "";
             let stderr = "";
             
@@ -42,7 +43,7 @@ class PythonBridge {
                     } else if (tool === "wearedevs") {
                         const traceScript = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
                         const reportPath = inputFile + ".report.txt";
-                        const deobfPath = inputFile + ".deobf.lua"; // المسار اللي حفظت فيه الأداة
+                        const deobfPath = inputFile + ".deobf.lua"; 
                         
                         const step2 = spawn("/opt/venv/bin/python3", [traceScript, reportPath], { timeout: 60000 });
                         let out2 = "", err2 = "";
@@ -51,12 +52,9 @@ class PythonBridge {
                         
                         step2.on("close", (c2) => {
                             if (c2 === 0) {
-                                // أول شي: ندور على الملف اللي حفظته الأداة
                                 if (fs.existsSync(deobfPath)) {
                                     resolve(fs.readFileSync(deobfPath, "utf-8"));
-                                } 
-                                // ثاني شي: إذا ما لقيناه، نرجع للكود اللي طلع في الشاشة
-                                else {
+                                } else {
                                     resolve(this.stripAnsi(out2));
                                 }
                             } else {
