@@ -58,7 +58,7 @@ async function resolveCode(interaction) {
 }
 
 async function handleVMExecution(interaction, code) {
-    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Engine (Trace -> Lua)..." });
+    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Engine..." });
     
     const tempDir = path.join(__dirname, `vm_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
@@ -68,13 +68,13 @@ async function handleVMExecution(interaction, code) {
     try {
         const result = await PythonBridge.run("wearedevs", tempIn);
         
-        if (result && result.length > 100 && result.includes("game:GetService") && !result.includes("UNPACK CALLED")) {
+        if (result && (result.includes("game:GetService") || result.includes("workspace") || result.includes("Instance.new")) && !result.includes("Reversing VM Expression")) {
             const finalDeobf = new Deobfuscator(result, { beautify: true });
             await finalDeobf.run();
             
             const buffer = Buffer.from(finalDeobf.code, "utf-8");
             await interaction.editReply({
-                content: "✅ **Extracted clean payload via Prometheus!**",
+                content: "✅ **Extracted clean payload successfully!**",
                 files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
             });
         } else {
