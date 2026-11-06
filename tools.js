@@ -10,32 +10,45 @@ class PythonBridge {
                 const reportPath = path.join(dir, "report.txt");
                 const outputPath = path.join(dir, "deobfuscated.lua");
                 
-                const step1 = spawn("/opt/venv/bin/python3", [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile], { timeout: 300000 });
-                let stdout = "";
+                const step1 = spawn("/opt/venv/bin/python3", [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile], { timeout: 300000, cwd: dir });
+                let step1Output = "";
                 
-                step1.stdout.on("data", (d) => stdout += d.toString());
+                step1.stdout.on("data", (d) => step1Output += d.toString());
                 
-                step1.on("close", () => {
-                    fs.writeFileSync(reportPath, stdout);
+                step1.on("close", (code) => {
+                    fs.writeFileSync(reportPath, step1Output);
                     
                     const traceToLuaPath = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
-                    if (!fs.existsSync(traceToLuaPath)) {
-                        return reject(new Error("trace_to_lua.py not found in tools/wearedevs"));
-                    }
                     
-                    const step2 = spawn("/opt/venv/bin/python3", [traceToLuaPath, reportPath], { timeout: 60000 });
-                    let convertedCode = "";
+                    const step2 = spawn("/opt/venv/bin/python3", [traceToLuaPath, reportPath, "-o", outputPath], { timeout: 120000, cwd: dir });
+                    let step2Output = "";
+                    let step2Error = "";
                     
-                    step2.stdout.on("data", (d) => convertedCode += d.toString());
+                    step2.stdout.on("data", (d) => step2Output += d.toString());
+                    step2.stderr.on("data", (d) => step2Error += d.toString());
                     
-                    step2.on("close", () => {
-                        if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 10) {
-                            return resolve(fs.readFileSync(outputPath, "utf-8"));
+                    step2.on("close", (code2) => {
+                        const possibleOutputs = [
+                            outputPath,
+                            path.join(dir, "deobfuscated.lua"),
+                            path.join(__dirname, "tools/wearedevs/deobfuscated.lua"),
+                            path.join(process.cwd(), "deobfuscated.lua")
+                        ];
+                        
+                        for (const p of possibleOutputs) {
+                            if (fs.existsSync(p) && fs.statSync(p).size > 50) {
+                                const content = fs.readFileSync(p, "utf-8");
+                                if (!content.includes("local Constants") && !content.includes("UNPACK CALLED")) {
+                                    return resolve(content);
+                                }
+                            }
                         }
-                        if (convertedCode && convertedCode.length > 10) {
-                            return resolve(convertedCode);
+                        
+                        if (step2Output && !step2Output.includes("local Constants") && !step2Output.includes("UNPACK CALLED") && step2Output.length > 50) {
+                            return resolve(step2Output);
                         }
-                        reject(new Error("Converter failed to produce clean code."));
+                        
+                        reject(new Error(`Converter finished with Code ${code2}. Output files not found. Stderr: ${step2Error.slice(0, 200)}`));
                     });
                 });
             } else if (tool === "prometheus") {
