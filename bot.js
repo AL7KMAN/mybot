@@ -22,7 +22,7 @@ const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 
 if (!TOKEN || !CLIENT_ID) {
-    console.error("CRITICAL: Missing DISCORD_TOKEN or CLIENT_ID environment variables.");
+    console.error("CRITICAL: Missing DISCORD_TOKEN or CLIENT_ID.");
     process.exit(1);
 }
 
@@ -42,7 +42,7 @@ async function registerCommands() {
     const rest = new REST({ version: "10" }).setToken(TOKEN);
     try {
         await rest.put(Routes.applicationCommands(CLIENT_ID), { body: commands });
-        Logger.log("SUCCESS", "Slash commands registered globally.");
+        Logger.log("SUCCESS", "Slash commands registered.");
     } catch (error) {
         Logger.log("ERROR", "Failed to register commands", { error: error.message });
     }
@@ -59,29 +59,23 @@ async function resolveCode(interaction) {
 }
 
 async function handleVMExecution(interaction, code) {
-    await interaction.editReply({ content: "⏳ **VM Detected.** Bypassing static analysis, deploying native execution engines..." });
+    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Native Dumper..." });
     
-    const tempIn = path.join(__dirname, `vm_temp_${Date.now()}.lua`);
+    const tempDir = path.join(__dirname, `vm_${Date.now()}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempIn = path.join(tempDir, "input.lua");
     fs.writeFileSync(tempIn, code);
-    const wrapperPath = path.join(__dirname, "wrapper.lua");
 
     try {
-        if (fs.existsSync(wrapperPath)) {
-            try {
-                const r = await PythonBridge.runLua51(tempIn, wrapperPath);
-                if (r && r.captured && r.captured.payload && r.captured.payload.length > 30) {
-                    const finalDeobf = new Deobfuscator(r.captured.payload, { beautify: true });
-                    await finalDeobf.run();
-                    const buffer = Buffer.from(finalDeobf.code, "utf-8");
-                    await interaction.editReply({
-                        content: "✅ **Extracted clean payload via Native Lua 5.1 Engine!**",
-                        files: [new AttachmentBuilder(buffer, { name: "deobfuscated_clean.lua" })]
-                    });
-                    return;
-                }
-            } catch (luaErr) {
-                Logger.log("WARN", "Lua 5.1 bypass failed, falling back to Wasmoon", { error: luaErr.message });
-            }
+        const result = await PythonBridge.run("wearedevs", tempIn);
+        
+        if (result && result.length > 100 && !result.includes("UNPACK CALLED") && !result.includes("CAPTURED CHUNK")) {
+            const buffer = Buffer.from(result, "utf-8");
+            await interaction.editReply({
+                content: "✅ **Extracted clean payload via Prometheus Dumper!**",
+                files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
+            });
+            return;
         }
 
         const sandboxResult = await LuaSandbox.run(code);
@@ -91,46 +85,43 @@ async function handleVMExecution(interaction, code) {
             await finalDeobf.run();
             const buffer = Buffer.from(finalDeobf.code, "utf-8");
             await interaction.editReply({
-                content: `✅ **Extracted payload via Wasmoon Sandbox!**\n🧠 Found ${sandboxResult.captures.length} chunks.`,
-                files: [new AttachmentBuilder(buffer, { name: "deobfuscated_clean.lua" })]
+                content: `✅ **Extracted payload via Wasmoon Sandbox!**`,
+                files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
             });
             return;
         }
 
-        const report = `=== SANDBOX DIAGNOSTICS ===\n\n[ERROR]\n${sandboxResult.error || 'None'}\n\n[LOGS]\n${sandboxResult.logs || 'Empty'}`;
+        const report = `=== DIAGNOSTICS ===\n\nOutput:\n${result ? result.slice(0, 3000) : 'None'}\n\nSandbox Error:\n${sandboxResult.error || 'None'}`;
         await interaction.editReply({
-            content: "❌ **VM engines failed to capture payload.** The script is likely heavily anti-tampered. Diagnostics attached:",
-            files: [new AttachmentBuilder(Buffer.from(report, "utf-8"), { name: "vm_diagnostics.txt" })]
+            content: "❌ **Failed to extract clean code.** Diagnostics attached:",
+            files: [new AttachmentBuilder(Buffer.from(report, "utf-8"), { name: "diagnostics.txt" })]
         });
+    } catch (err) {
+        await interaction.editReply({ content: `❌ **Error:** \`${err.message}\`` });
     } finally {
-        try { fs.unlinkSync(tempIn); } catch (e) {}
+        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
 }
 
 async function handleStandardDeobfuscation(interaction, code, detectionName) {
-    await interaction.editReply({ content: "🧠 **Smart Pipeline Activated:** Routing script through deobfuscation tools..." });
-
+    await interaction.editReply({ content: "🧠 **Smart Pipeline Activated:** Routing script through tools..." });
     const tempDir = path.join(__dirname, `pipeline_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
 
     try {
         const pipelineResult = await Pipeline.runChain(code, tempDir, detectionName);
-        
         if (pipelineResult.code) {
             const finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
             const finalName = pipelineResult.isClean ? "deobfuscated_clean.lua" : "extracted_partial.lua";
             const toolsStr = pipelineResult.tools.join(" ➔ ");
-            
             const statusMsg = pipelineResult.isClean
-                ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\`\n✨ Code is clean and beautified.`
-                : `⚠️ **Partial Extraction Complete.**\n🧠 Pipeline: \`${toolsStr}\`\n*(Script may require runtime execution)*`;
-
+                ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\``
+                : `⚠️ **Partial Extraction.**\n🧠 Pipeline: \`${toolsStr}\``;
             await interaction.editReply({ content: statusMsg, files: [new AttachmentBuilder(finalBuffer, { name: finalName })] });
         } else {
-            await interaction.editReply({ content: "❌ **Pipeline failed.** All tools exhausted without result." });
+            await interaction.editReply({ content: "❌ **Pipeline failed.** All tools exhausted." });
         }
     } catch (err) {
-        Logger.log("ERROR", "Pipeline Error", { error: err.message });
         await interaction.editReply({ content: `❌ **Pipeline crashed:** \`${err.message}\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
@@ -139,7 +130,6 @@ async function handleStandardDeobfuscation(interaction, code, detectionName) {
 
 client.once("ready", () => {
     Logger.log("SUCCESS", `Bot online: ${client.user.tag}`);
-    Logger.log("INFO", `Serving ${client.guilds.cache.size} guilds.`);
     registerCommands();
 });
 
@@ -149,71 +139,38 @@ client.on("interactionCreate", async (interaction) => {
 
     try {
         if (interaction.commandName === "help") {
-            const embed = new EmbedBuilder()
-                .setColor(0x2b2d31)
-                .setTitle("🤖 God-Mode Deobfuscator V5")
-                .setDescription("Advanced Lua deobfuscation with multi-engine routing.")
-                .addFields(
-                    { name: "⚙️ Core", value: "`/deobf`, `/deobf_url`, `/deobf_file`" },
-                    { name: "🔍 Analysis", value: "`/detect`, `/layers`, `/vmdetect`" }
-                );
-            return interaction.editReply({ embeds: [embed] });
+            return interaction.editReply({ content: "🤖 **God-Mode Deobfuscator V5**\n`/deobf`, `/deobf_url`, `/deobf_file`, `/detect`, `/layers`, `/vmdetect`" });
         }
 
         if (interaction.commandName === "vmdetect") {
             const { code, source } = await resolveCode(interaction);
             const vm = VMAnalyzer.analyze(code);
             const at = AntiTamperDetector.detect(code);
-            const embed = new EmbedBuilder()
-                .setColor(vm.isVM ? 0xff6600 : 0x00ff88)
-                .setTitle("🖥️ VM Analysis")
-                .addFields(
-                    { name: "Source", value: source, inline: true },
-                    { name: "Is VM", value: vm.isVM ? `YES (${vm.score}/20)` : "No", inline: true },
-                    { name: "Family", value: vm.likelyFamily, inline: true },
-                    { name: "Anti-Tamper", value: at.riskLevel, inline: true }
-                );
-            return interaction.editReply({ embeds: [embed] });
+            return interaction.editReply({ content: `🖥️ **VM Analysis**\nSource: ${source}\nIs VM: **${vm.isVM ? "YES" : "No"}**\nFamily: **${vm.likelyFamily}**\nAnti-Tamper: **${at.riskLevel}**` });
         }
 
         if (interaction.commandName === "detect") {
             const { code, source } = await resolveCode(interaction);
             const detection = new Detector(code).detect();
             const layers = new Detector(code).analyzeLayers(code);
-            const embed = new EmbedBuilder()
-                .setColor(detection.name === "Clean" ? 0x00ff88 : 0xffaa00)
-                .setTitle("🔍 Obfuscation Detection")
-                .addFields(
-                    { name: "Source", value: source, inline: true },
-                    { name: "Type", value: detection.name, inline: true },
-                    { name: "Confidence", value: `${detection.confidence}%`, inline: true },
-                    { name: "Layers", value: `${layers.layers.length}`, inline: true }
-                );
-            return interaction.editReply({ embeds: [embed] });
+            return interaction.editReply({ content: `🔍 **Detection**\nSource: ${source}\nType: **${detection.name}**\nConfidence: **${detection.confidence}%**\nLayers: **${layers.layers.length}**` });
         }
 
         if (interaction.commandName === "layers") {
             const code = interaction.options.getString("code");
             const analysis = new Detector(code).analyzeLayers(code);
-            return interaction.editReply({
-                content: `🧅 **Analyzed ${analysis.layers.length} layers.**`,
-                files: [new AttachmentBuilder(Buffer.from(analysis.final, "utf-8"), { name: "unwrapped.lua" })]
-            });
+            return interaction.editReply({ content: `🧅 **Analyzed ${analysis.layers.length} layers.**`, files: [new AttachmentBuilder(Buffer.from(analysis.final, "utf-8"), { name: "unwrapped.lua" })] });
         }
 
         if (["deobf", "deobf_url", "deobf_file"].includes(interaction.commandName)) {
             const { code } = await resolveCode(interaction);
-            if (!code || code.trim().length === 0) throw new Error("Provided script is empty.");
+            if (!code || code.trim().length === 0) throw new Error("Script is empty.");
             if (code.length > 500000) throw new Error("Script exceeds 500KB limit.");
 
             const quickDetect = new Detector(code).detect();
             const vmInfo = VMAnalyzer.analyze(code);
 
-            const isTargetVM = quickDetect.name === "MoonVeil" || 
-                               quickDetect.name === "WeAreDevs" || 
-                               vmInfo.isVM || 
-                               code.includes("wearedevs.net/obfuscator") || 
-                               code.includes("zy28uHLFUuAPgKtOc0AcRNq");
+            const isTargetVM = quickDetect.name === "MoonVeil" || quickDetect.name === "WeAreDevs" || vmInfo.isVM || code.includes("wearedevs.net/obfuscator") || code.includes("zy28uHLFUuAPgKtOc0AcRNq");
 
             if (isTargetVM) {
                 await handleVMExecution(interaction, code);
@@ -222,7 +179,6 @@ client.on("interactionCreate", async (interaction) => {
             }
         }
     } catch (error) {
-        Logger.log("ERROR", `Command Error: ${interaction.commandName}`, { error: error.message });
         await interaction.editReply({ content: `❌ **Error:** ${error.message.slice(0, 1500)}` }).catch(() => {});
     }
 });
