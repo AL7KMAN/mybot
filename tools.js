@@ -17,7 +17,7 @@ class PythonBridge {
                 options = { timeout: 180000 };
             } else if (tool === "wearedevs") {
                 cmd = "/opt/venv/bin/python3";
-                args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile, "--max-waits", "10"];
+                args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
                 options = { 
                     timeout: 180000,
                     env: { ...process.env, LUA51_EXECUTABLE: "/app/tools/wearedevs/lua_linux/lua5.1" }
@@ -38,21 +38,24 @@ class PythonBridge {
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
             proc.on("close", (code) => {
-                // 🚀 السر السحري: إذا طلع لنا مسار "Saved"، نروح نقرأ الملف فوراً
-                if (stdout.includes("Saved ")) {
-                    const savedPath = stdout.split("Saved ")[1].trim();
+                const combinedOut = stdout + "\n" + stderr;
+
+                // 1. ندور على كلمة Saved في المخرجات كلها
+                const savedMatch = combinedOut.match(/Saved\s+(.+?\.lua)/i);
+                if (savedMatch) {
+                    const savedPath = savedMatch[1].trim();
                     if (fs.existsSync(savedPath)) {
                         return resolve(fs.readFileSync(savedPath, "utf-8"));
                     }
                 }
 
-                // أو إذا كان الملف معروف باسمه
+                // 2. ندور على الملف النظيف المعتاد
                 const deobfPath = inputFile + ".deobf.lua";
                 if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
                     return resolve(fs.readFileSync(deobfPath, "utf-8"));
                 }
 
-                // الخطة البديلة: تشغيل الأداة الثانية
+                // 3. الخطة البديلة إذا ما لقينا شي
                 if (code === 0 || fs.existsSync(inputFile + ".report.txt")) {
                     if (tool === "moonsec") {
                         try {
@@ -71,10 +74,12 @@ class PythonBridge {
                         step2.stderr.on("data", (d) => err2 += d.toString());
                         
                         step2.on("close", (c2) => {
+                            const finalOut = this.stripAnsi(out2);
+                            
                             if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
                                 return resolve(fs.readFileSync(deobfPath, "utf-8"));
                             }
-                            const finalOut = this.stripAnsi(out2);
+                            
                             if (c2 === 0) resolve(finalOut);
                             else reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
                         });
