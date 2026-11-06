@@ -23,8 +23,8 @@ class PythonBridge {
                 return reject(new Error("Unknown tool"));
             }
             
-            // نعطيها 45 ثانية، ولو علقت نقتلها
-            const proc = spawn(cmd, args, { timeout: 45000, killSignal: 'SIGKILL' });
+            // 1. رجعنا الوقت الأصلي 180 ثانية بدون أي قتل قسري عشان نرجع زي أول مرة
+            const proc = spawn(cmd, args, { timeout: 180000 });
             let stdout = "";
             let stderr = "";
             
@@ -32,13 +32,6 @@ class PythonBridge {
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
             proc.on("close", (code) => {
-                // أهم خطوة: نفحص أول شي إذا الملف النظيف انحفظ!
-                const deobfPath = inputFile + ".deobf.lua";
-                if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 100) {
-                    return resolve(fs.readFileSync(deobfPath, "utf-8"));
-                }
-
-                // إذا ما انحفظ، نكمل الطريقة العادية
                 if (code === 0 || fs.existsSync(inputFile + ".report.txt")) {
                     if (tool === "moonsec") {
                         try {
@@ -51,19 +44,24 @@ class PythonBridge {
                         const traceScript = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
                         const reportPath = inputFile + ".report.txt";
                         
-                        const step2 = spawn("/opt/venv/bin/python3", [traceScript, reportPath], { timeout: 60000, killSignal: 'SIGKILL' });
+                        const step2 = spawn("/opt/venv/bin/python3", [traceScript, reportPath], { timeout: 60000 });
                         let out2 = "", err2 = "";
                         step2.stdout.on("data", (d) => out2 += d.toString());
                         step2.stderr.on("data", (d) => err2 += d.toString());
                         
                         step2.on("close", (c2) => {
-                            if (fs.existsSync(deobfPath)) {
-                                resolve(fs.readFileSync(deobfPath, "utf-8"));
-                            } else if (c2 === 0) {
-                                resolve(this.stripAnsi(out2));
-                            } else {
-                                reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
+                            const finalOut = this.stripAnsi(out2);
+                            
+                            // 2. هنا الفحص الذكي: إذا طلع تقرير خام أو كلمة Saved، نقرأ الملف النظيف
+                            if (finalOut.includes("local Constants") || finalOut.includes("Saved ") || finalOut.trim().length < 50) {
+                                const deobfPath = inputFile + ".deobf.lua";
+                                if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
+                                    return resolve(fs.readFileSync(deobfPath, "utf-8"));
+                                }
                             }
+
+                            if (c2 === 0) resolve(finalOut);
+                            else reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
                         });
                     } else {
                         const dir = path.dirname(inputFile);
@@ -99,7 +97,7 @@ class PythonBridge {
 
     static async runUnluac(luacPath) {
         return new Promise((resolve, reject) => {
-            const proc = spawn("java", ["-jar", path.join(__dirname, "unluac.jar"), luacPath], { timeout: 60000, killSignal: 'SIGKILL' });
+            const proc = spawn("java", ["-jar", path.join(__dirname, "unluac.jar"), luacPath], { timeout: 60000 });
             let stdout = "";
             let stderr = "";
             proc.stdout.on("data", (data) => { stdout += data.toString(); });
@@ -116,7 +114,7 @@ class PythonBridge {
 
     static async runLua51(inputFile, wrapperPath) {
         return new Promise((resolve, reject) => {
-            const proc = spawn("lua5.1", [wrapperPath, inputFile], { timeout: 25000, killSignal: 'SIGKILL' });
+            const proc = spawn("lua5.1", [wrapperPath, inputFile], { timeout: 25000 });
             let out = "", err = "";
             proc.stdout.on("data", d => out += d.toString());
             proc.stderr.on("data", d => err += d.toString());
