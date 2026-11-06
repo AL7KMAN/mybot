@@ -18,6 +18,7 @@ class PythonBridge {
             } else {
                 return reject(new Error("Unknown tool"));
             }
+            
             const proc = spawn(cmd, args, { timeout: 120000 });
             let stdout = "";
             let stderr = "";
@@ -34,53 +35,32 @@ class PythonBridge {
                             reject(new Error("Failed to read Moonsec output"));
                         }
                     } else {
-                        const outputPath = path.join(path.dirname(inputFile), "output.lua");
-                        if (fs.existsSync(outputPath)) {
-                            const finalCode = fs.readFileSync(outputPath, "utf-8");
+                        const dir = path.dirname(inputFile);
+                        const possibleFiles = [
+                            "deobfuscated.lua", 
+                            "output.lua", 
+                            "result.lua", 
+                            "reconstructed.lua",
+                            inputFile.replace(".lua", "_deobfuscated.lua")
+                        ];
+                        
+                        let finalCode = null;
+                        for (const f of possibleFiles) {
+                            const fullPath = path.join(dir, f);
+                            if (fs.existsSync(fullPath)) {
+                                finalCode = fs.readFileSync(fullPath, "utf-8");
+                                if (finalCode.length > 50) break;
+                            }
+                        }
+
+                        if (finalCode && finalCode.length > 50) {
                             resolve(finalCode);
                         } else {
-                            resolve(this.cleanTraceOutput(stdout));
+                            resolve(stdout || "Tool finished, but no output file found.");
                         }
                     }
                 } else {
-                    const errMsg = stderr || "Unknown error";
-                    reject(new Error(`Tool Error (${code}): ${errMsg.slice(0, 1500)}`));
-                }
-            });
-        });
-    }
-
-    static cleanTraceOutput(str) {
-        const lines = str.split('\n');
-        const cleanLines = lines.filter(line => {
-            const l = line.trim();
-            if (l.startsWith('Processing ')) return false;
-            if (l.startsWith('Executing ')) return false;
-            if (l.startsWith('UNPACK CALLED')) return false;
-            if (l.startsWith('CAPTURED CHUNK')) return false;
-            if (l.startsWith('ACCESSED (NIL)')) return false;
-            if (l.startsWith('local Constants =')) return false;
-            if (l.startsWith('{ [1] =')) return false;
-            if (l.startsWith('File "') && l.includes('", line ')) return false;
-            if (l.startsWith('Traceback')) return false;
-            if (l.includes('Error:') && l.includes('File "')) return false;
-            return true;
-        });
-        return cleanLines.join('\n').trim();
-    }
-
-    static async runUnluac(luacPath) {
-        return new Promise((resolve, reject) => {
-            const proc = spawn("java", ["-jar", path.join(__dirname, "unluac.jar"), luacPath], { timeout: 60000 });
-            let stdout = "";
-            let stderr = "";
-            proc.stdout.on("data", (data) => { stdout += data.toString(); });
-            proc.stderr.on("data", (data) => { stderr += data.toString(); });
-            proc.on("close", (code) => {
-                if (code === 0) {
-                    resolve(stdout);
-                } else {
-                    reject(new Error(`unluac Error: ${stderr}`));
+                    reject(new Error(`Tool Error (${code}): ${stderr.slice(0, 1500)}`));
                 }
             });
         });
