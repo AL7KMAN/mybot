@@ -22,21 +22,21 @@ class PythonBridge {
                     
                     const traceToLuaPath = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
                     if (!fs.existsSync(traceToLuaPath)) {
-                        return reject(new Error("trace_to_lua.py not found"));
+                        return reject(new Error("trace_to_lua.py not found in tools/wearedevs"));
                     }
                     
                     const step2 = spawn("/opt/venv/bin/python3", [traceToLuaPath, reportPath], { timeout: 60000 });
                     let step2Output = "";
+                    let step2Error = "";
                     
                     step2.stdout.on("data", (d) => step2Output += d.toString());
+                    step2.stderr.on("data", (d) => step2Error += d.toString());
                     
                     step2.on("close", (code2) => {
-                        if (fs.existsSync(outputPath)) {
+                        if (code2 === 0 && fs.existsSync(outputPath)) {
                             resolve(fs.readFileSync(outputPath, "utf-8"));
-                        } else if (step2Output.length > 50 && !step2Output.includes("local Constants")) {
-                            resolve(step2Output);
                         } else {
-                            reject(new Error("Trace conversion failed, raw trace rejected."));
+                            reject(new Error(`Converter failed (Code ${code2}). STDERR: ${step2Error.slice(0, 500)}`));
                         }
                     });
                 });
