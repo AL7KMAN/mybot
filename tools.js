@@ -9,42 +9,72 @@ class PythonBridge {
 
     static async run(tool, inputFile) {
         return new Promise((resolve, reject) => {
-            let cmd, args, options;
+            if (tool === "wearedevs") {
+                const dir = path.dirname(inputFile);
+                const luaDir = path.join(__dirname, "tools/wearedevs");
+                const reportPath = inputFile + ".report.txt";
+
+                const step1 = spawn("/opt/venv/bin/python3", [
+                    path.join(luaDir, "deobfuscator.py"),
+                    inputFile
+                ], { timeout: 300000, cwd: dir, killSignal: 'SIGKILL' });
+
+                let s1out = "";
+                let s1err = "";
+                step1.stdout.on("data", (d) => s1out += d.toString());
+                step1.stderr.on("data", (d) => s1err += d.toString());
+
+                step1.on("close", (c1) => {
+                    if (!fs.existsSync(reportPath)) {
+                        return reject(new Error(`Dumper failed. No report.txt generated.`));
+                    }
+
+                    const traceToLua = path.join(luaDir, "trace_to_lua.py");
+                    if (!fs.existsSync(traceToLua)) {
+                        return reject(new Error("trace_to_lua.py missing"));
+                    }
+
+                    const step2 = spawn("/opt/venv/bin/python3", [
+                        traceToLua,
+                        reportPath
+                    ], { timeout: 120000, cwd: dir, killSignal: 'SIGKILL' });
+
+                    let s2out = "";
+                    let s2err = "";
+                    step2.stdout.on("data", (d) => s2out += d.toString());
+                    step2.stderr.on("data", (d) => s2err += d.toString());
+
+                    step2.on("close", (c2) => {
+                        // الفحص السحري: إذا طلع الملف النظيف نقرأه فوراً
+                        const deobfPath = inputFile + ".deobf.lua";
+                        if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
+                            return resolve(fs.readFileSync(deobfPath, "utf-8"));
+                        }
+                        resolve(this.stripAnsi(s2out));
+                    });
+                });
+                return;
+            }
             
+            let cmd, args;
             if (tool === "prometheus") {
                 cmd = "/opt/venv/bin/python3";
                 args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
-                options = { timeout: 60000 };
-            } else if (tool === "wearedevs") {
-                cmd = "/opt/venv/bin/python3";
-                args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
-                options = { 
-                    timeout: 60000,
-                    env: { ...process.env, LUA51_EXECUTABLE: "/app/tools/wearedevs/lua_linux/lua5.1" }
-                };
             } else if (tool === "moonsec") {
                 cmd = "dotnet";
                 args = [path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
-                options = { timeout: 60000 };
             } else {
                 return reject(new Error("Unknown tool"));
             }
             
-            const proc = spawn(cmd, args, options);
+            const proc = spawn(cmd, args, { timeout: 120000 });
             let stdout = "";
             let stderr = "";
-            
             proc.stdout.on("data", (data) => { stdout += data.toString(); });
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
             proc.on("close", (code) => {
-                // 🔴 الفحص السحري: إذا لقينا الملف النظيف، نأخذه ونكنسل الأداة الثانية
-                const deobfPath = inputFile + ".deobf.lua";
-                if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
-                    return resolve(fs.readFileSync(deobfPath, "utf-8"));
-                }
-
-                if (code === 0 || fs.existsSync(inputFile + ".report.txt")) {
+                if (code === 0) {
                     if (tool === "moonsec") {
                         try {
                             const luacData = fs.readFileSync(inputFile + ".luac");
@@ -52,40 +82,8 @@ class PythonBridge {
                         } catch (e) {
                             reject(new Error("Failed to read Moonsec output"));
                         }
-                    } else if (tool === "wearedevs") {
-                        const traceScript = path.join(__dirname, "tools/wearedevs/trace_to_lua.py");
-                        const reportPath = inputFile + ".report.txt";
-                        
-                        const step2 = spawn("/opt/venv/bin/python3", [traceScript, reportPath], { timeout: 60000 });
-                        let out2 = "", err2 = "";
-                        step2.stdout.on("data", (d) => out2 += d.toString());
-                        step2.stderr.on("data", (d) => err2 += d.toString());
-                        
-                        step2.on("close", (c2) => {
-                            if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
-                                return resolve(fs.readFileSync(deobfPath, "utf-8"));
-                            }
-                            if (c2 === 0) resolve(this.stripAnsi(out2));
-                            else reject(new Error(`trace_to_lua Error (${c2}): ${err2}`));
-                        });
                     } else {
-                        const dir = path.dirname(inputFile);
-                        const possibleFiles = ["deobfuscated.lua", "output.lua", "result.lua", "reconstructed.lua", inputFile.replace(".lua", "_deobfuscated.lua")];
-                        
-                        let finalCode = null;
-                        for (const f of possibleFiles) {
-                            const fullPath = path.join(dir, f);
-                            if (fs.existsSync(fullPath)) {
-                                finalCode = fs.readFileSync(fullPath, "utf-8");
-                                if (finalCode.length > 50) break;
-                            }
-                        }
-
-                        if (finalCode && finalCode.length > 50) {
-                            resolve(finalCode);
-                        } else {
-                            resolve(stdout || "Tool finished, but no output file found.");
-                        }
+                        resolve(this.stripAnsi(stdout) || "Success");
                     }
                 } else {
                     reject(new Error(`Tool Error (${code}): ${stderr.slice(0, 1500)}`));
