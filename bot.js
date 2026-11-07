@@ -4,16 +4,7 @@ const { Routes } = require("discord-api-types/v9");
 const fs = require("fs");
 const path = require("path");
 
-const {
-    Logger,
-    Detector,
-    VMAnalyzer,
-    AntiTamperDetector,
-    Deobfuscator,
-    fetchCodeFromUrl,
-    readAttachment
-} = require('./core.js');
-
+const { Logger, Detector, VMAnalyzer, AntiTamperDetector, Deobfuscator, fetchCodeFromUrl, readAttachment } = require('./core.js');
 const { PythonBridge } = require('./tools.js');
 const { Pipeline } = require('./pipeline.js');
 
@@ -58,7 +49,7 @@ async function resolveCode(interaction) {
 }
 
 async function handleVMExecution(interaction, code) {
-    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Native Engine..." });
+    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Node.js Engine..." });
     
     const tempDir = path.join(__dirname, `vm_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
@@ -68,13 +59,13 @@ async function handleVMExecution(interaction, code) {
     try {
         const result = await PythonBridge.run("wearedevs", tempIn);
         
-        if (result && result.length > 50 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
+        if (result && result.length > 50 && !result.includes("local Constants")) {
             const finalDeobf = new Deobfuscator(result, { beautify: true });
             await finalDeobf.run();
             
             const buffer = Buffer.from(finalDeobf.code, "utf-8");
             await interaction.editReply({
-                content: "✅ **Extracted clean payload via Prometheus!**",
+                content: "✅ **Extracted clean payload via Prometheus Node.js!**",
                 files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
             });
         } else {
