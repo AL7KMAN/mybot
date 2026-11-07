@@ -34,13 +34,17 @@ class PythonBridge {
                 return;
             }
 
+            if (tool === "moonsec") {
+                return reject(new Error("Moonsec is now handled by MoonsecBridge. Pipeline should not call this."));
+            }
+
             let cmd, args, options;
             if (tool === "prometheus") {
                 cmd = "/opt/venv/bin/python3";
                 args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
                 options = { timeout: 60000 };
             } else {
-                return reject(new Error("Unknown tool"));
+                return reject(new Error(`Unknown tool: ${tool}`));
             }
             
             const proc = spawn(cmd, args, options);
