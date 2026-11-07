@@ -68,8 +68,12 @@ async function handleVMExecution(interaction, code, detectionName) {
         if (result && result.startsWith("BYTECODE_HEX:")) {
             const hex = result.replace("BYTECODE_HEX:", "");
             const buffer = Buffer.from(hex, "hex");
+            
+            const rawString = buffer.toString("utf-8").replace(/\0/g, "");
+            let previewContent = rawString.length > 1800 ? rawString.slice(0, 1800) + "\n... (Truncated)" : rawString;
+
             await interaction.editReply({
-                content: "⚠️ **Decompiler failed (Script is heavily protected).**\nHere is the extracted Bytecode (.luac). You can try decompiling it externally.",
+                content: `⚠️ **Decompiler failed (Script is heavily protected).**\nHere is the extracted Bytecode preview:\n\`\`\`lua\n${previewContent}\n\`\`\``,
                 files: [new AttachmentBuilder(buffer, { name: "protected_script.luac" })]
             }).catch(() => {});
         } else if (result && result.length > 50 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
