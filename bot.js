@@ -69,13 +69,14 @@ async function handleVMExecution(interaction, code, detectionName) {
             const hex = result.replace("BYTECODE_HEX:", "");
             const buffer = Buffer.from(hex, "hex");
             await interaction.editReply({
-                content: "⚠️ **Decompiler failed (Script is heavily protected).**\nHere is the extracted Bytecode (.luac).",
+                content: "⚠️ **Decompiler failed (Heavily protected).**\nHere is the extracted Bytecode (.luac).",
                 files: [new AttachmentBuilder(buffer, { name: "protected_script.luac" })]
             }).catch(() => {});
-        } else if (result && result.length > 50 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
+        } else if (result && result.length > 50) {
             
             let finalCode = result;
-            if (!result.startsWith("-- decompiled by")) {
+            
+            if (!detectionName.includes("Moonsec")) {
                 const finalDeobf = new Deobfuscator(result, { beautify: true });
                 await finalDeobf.run();
                 finalCode = finalDeobf.code;
