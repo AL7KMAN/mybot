@@ -65,31 +65,31 @@ async function handleVMExecution(interaction, code, detectionName) {
             result = await PythonBridge.run("wearedevs", tempIn);
         }
         
-        if (result && result.length > 50) {
-            let finalCode = result;
-            let fileName = "deobfuscated.lua";
-
-            if (result.startsWith("=== MOONSEC DEOBFUSCATION REPORT ===")) {
-                fileName = "moonsec_report.txt";
-            } else if (!detectionName.includes("Moonsec")) {
-                const finalDeobf = new Deobfuscator(result, { beautify: true });
-                await finalDeobf.run();
-                finalCode = finalDeobf.code;
+        if (result && result.isBytecode) {
+            let msg = "⚠️ **Decompiler failed (Advanced VM Protection).**\nHere is the extracted Bytecode (.luac). Upload it to an online decompiler.";
+            if (result.logs) {
+                msg += `\n\n**Sandbox Logs:**\n\`\`\`\n${result.logs.slice(0, 1000)}\n\`\`\``;
             }
-            
-            const buffer = Buffer.from(finalCode, "utf-8");
-            
             await interaction.editReply({
-                content: `✅ **Extracted output!**`,
-                files: [new AttachmentBuilder(buffer, { name: fileName })]
+                content: msg,
+                files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })]
             }).catch(() => {});
-            
+        } else if (result && result.text) {
+            await interaction.editReply({
+                content: `✅ **Extracted clean payload!**`,
+                files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })]
+            }).catch(() => {});
+        } else if (result && result.error) {
+            await interaction.editReply({ content: `❌ **Error:** ${result.error}` }).catch(() => {});
+        } else if (typeof result === 'string' && result.length > 50) {
+            const finalDeobf = new Deobfuscator(result, { beautify: true });
+            await finalDeobf.run();
+            await interaction.editReply({
+                content: `✅ **Extracted clean payload!**`,
+                files: [new AttachmentBuilder(Buffer.from(finalDeobf.code, "utf-8"), { name: "deobfuscated.lua" })]
+            }).catch(() => {});
         } else {
-            const report = `=== DIAGNOSTICS ===\n\nOutput:\n${result ? result.slice(0, 5000) : 'None'}`;
-            await interaction.editReply({
-                content: "❌ **Failed to extract clean code.** Diagnostics attached:",
-                files: [new AttachmentBuilder(Buffer.from(report, "utf-8"), { name: "diagnostics.txt" })]
-            }).catch(() => {});
+            await interaction.editReply({ content: "❌ **Failed to extract.** Diagnostics exhausted." }).catch(() => {});
         }
     } catch (err) {
         await interaction.editReply({ content: `❌ **Error:** \`${err.message}\`` }).catch(() => {});
