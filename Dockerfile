@@ -19,20 +19,20 @@ COPY . .
 
 RUN npm install
 
-RUN git clone https://github.com/prostone4/Prometheus-Deobfuscator.git /app/prometheus-deobf
-RUN cd /app/prometheus-deobf && npm install
+RUN git clone https://github.com/prostone4/Prometheus-Deobfuscator.git /app/prometheus-deobf || true
+RUN cd /app/prometheus-deobf && npm install || true
 
 RUN python3.12 -m venv /opt/venv
 RUN /opt/venv/bin/pip install -r requirements.txt
 
 RUN mkdir -p tools && \
-    git clone https://github.com/0x251/Prometheus-Deobfuscator.git tools/prometheus && \
-    git clone https://github.com/hutaoshusband/Prometheus-WeAre-Devs-Dumper.git tools/wearedevs && \
+    git clone https://github.com/0x251/Prometheus-Deobfuscator.git tools/prometheus || true && \
+    git clone https://github.com/hutaoshusband/Prometheus-WeAre-Devs-Dumper.git tools/wearedevs || true && \
     mkdir -p /app/tools/wearedevs/lua_linux && \
     cp /usr/bin/lua5.1 /app/tools/wearedevs/lua_linux/lua5.1 && \
     chmod +x /app/tools/wearedevs/lua_linux/lua5.1 && \
-    git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec && \
-    cd tools/moosec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
+    git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec || true && \
+    cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin || true
 
 RUN wget -O /app/unluac.jar https://sourceforge.net/projects/unluac/files/latest/download
 
