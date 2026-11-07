@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } = require("discord.js");
+hereconst { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } = require("discord.js");
 const { REST } = require("@discordjs/rest");
 const { Routes } = require("discord-api-types/v9");
 const fs = require("fs");
@@ -48,8 +48,8 @@ async function resolveCode(interaction) {
     throw new Error("You must provide code, a URL, or a file.");
 }
 
-async function handleVMExecution(interaction, code) {
-    await interaction.editReply({ content: "⏳ **VM Detected.** Running Prometheus Node.js Engine..." });
+async function handleVMExecution(interaction, code, detectionName) {
+    await interaction.editReply({ content: `⏳ **${detectionName} Detected.** Running Native Engine...` });
     
     const tempDir = path.join(__dirname, `vm_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
@@ -57,15 +57,20 @@ async function handleVMExecution(interaction, code) {
     fs.writeFileSync(tempIn, code);
 
     try {
-        const result = await PythonBridge.run("wearedevs", tempIn);
+        let toolName = "wearedevs";
+        if (detectionName === "Moonsec V3" || detectionName === "Moonsec V2") {
+            toolName = "moonsec";
+        }
+
+        const result = await PythonBridge.run(toolName, tempIn);
         
-        if (result && result.length > 50 && !result.includes("local Constants")) {
+        if (result && result.length > 50 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
             const finalDeobf = new Deobfuscator(result, { beautify: true });
             await finalDeobf.run();
             
             const buffer = Buffer.from(finalDeobf.code, "utf-8");
             await interaction.editReply({
-                content: "✅ **Extracted clean payload via Prometheus Node.js!**",
+                content: `✅ **Extracted clean payload via ${toolName}!**`,
                 files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
             });
         } else {
@@ -149,10 +154,14 @@ client.on("interactionCreate", async (interaction) => {
             const quickDetect = new Detector(code).detect();
             const vmInfo = VMAnalyzer.analyze(code);
 
-            const isTargetVM = quickDetect.name === "MoonVeil" || quickDetect.name === "WeAreDevs" || vmInfo.isVM || code.includes("wearedevs.net/obfuscator") || code.includes("zy28uHLFUuAPgKtOc0AcRNq");
+            const isTargetVM = quickDetect.name.includes("WeAreDevs") || 
+                               quickDetect.name.includes("Moonsec") || 
+                               vmInfo.isVM || 
+                               code.includes("wearedevs.net/obfuscator") || 
+                               code.includes("MoonSec");
 
             if (isTargetVM) {
-                await handleVMExecution(interaction, code);
+                await handleVMExecution(interaction, code, quickDetect.name);
             } else {
                 await handleStandardDeobfuscation(interaction, code, quickDetect.name);
             }
