@@ -81,15 +81,13 @@ async function handleVMExecution(interaction, code, detectionName) {
                 finalCode = finalDeobf.code;
             }
             
-            if (finalCode.length > 1900) {
-                await interaction.editReply({
-                    content: `✅ **Extracted Code (Too long, showing first 1900 chars):**\n\`\`\`lua\n${finalCode.slice(0, 1900)}\n\`\`\``
-                }).catch(() => {});
-            } else {
-                await interaction.editReply({
-                    content: `✅ **Extracted Code:**\n\`\`\`lua\n${finalCode}\n\`\`\``
-                }).catch(() => {});
-            }
+            const buffer = Buffer.from(finalCode, "utf-8");
+            let previewContent = finalCode.length > 1800 ? finalCode.slice(0, 1800) + "\n... (Truncated)" : finalCode;
+            
+            await interaction.editReply({
+                content: `✅ **Extracted Code:**\n\`\`\`lua\n${previewContent}\n\`\`\``,
+                files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
+            }).catch(() => {});
             
         } else {
             const report = `=== DIAGNOSTICS ===\n\nOutput:\n${result ? result.slice(0, 5000) : 'None'}`;
@@ -113,11 +111,16 @@ async function handleStandardDeobfuscation(interaction, code, detectionName) {
     try {
         const pipelineResult = await Pipeline.runChain(code, tempDir, detectionName);
         if (pipelineResult.code) {
-            if (pipelineResult.code.length > 1900) {
-                 await interaction.editReply({ content: `✅ **Extracted Code (Too long, showing first 1900 chars):**\n\`\`\`lua\n${pipelineResult.code.slice(0, 1900)}\n\`\`\`` }).catch(() => {});
-            } else {
-                 await interaction.editReply({ content: `✅ **Extracted Code:**\n\`\`\`lua\n${pipelineResult.code}\n\`\`\`` }).catch(() => {});
-            }
+            const finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
+            const finalName = pipelineResult.isClean ? "deobfuscated_clean.lua" : "extracted_partial.lua";
+            const toolsStr = pipelineResult.tools.join(" ➔ ");
+            
+            let previewContent = pipelineResult.code.length > 1800 ? pipelineResult.code.slice(0, 1800) + "\n... (Truncated)" : pipelineResult.code;
+            const statusMsg = pipelineResult.isClean
+                ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\`\n\`\`\`lua\n${previewContent}\n\`\`\``
+                : `⚠️ **Partial Extraction.**\n🧠 Pipeline: \`${toolsStr}\`\n\`\`\`lua\n${previewContent}\n\`\`\``;
+                
+            await interaction.editReply({ content: statusMsg, files: [new AttachmentBuilder(finalBuffer, { name: finalName })] }).catch(() => {});
         } else {
             await interaction.editReply({ content: "❌ **Pipeline failed.** All tools exhausted." }).catch(() => {});
         }
