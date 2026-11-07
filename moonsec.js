@@ -39,7 +39,7 @@ class MoonsecBridge {
                 unluacProc.stderr.on("data", (data) => { err += data.toString(); });
 
                 unluacProc.on("error", (jErr) => {
-                    reject(new Error(`Failed to start unluac-rs: ${jErr.message}`));
+                    reject(new Error(`Failed to start unluac-cli: ${jErr.message}`));
                 });
 
                 unluacProc.on("close", (jCode) => {
