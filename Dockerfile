@@ -34,10 +34,8 @@ RUN mkdir -p tools && \
     git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec && \
     cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
 
-RUN wget https://github.com/atrexus/unluau/archive/refs/heads/master.zip -O unluau.zip && \
-    unzip unluau.zip && \
-    mv unluau-master unluau-src && \
-    cd unluau-src && \
+RUN git clone https://github.com/Voraline/unluau-binaries.git /app/unluau-src && \
+    cd /app/unluau-src && \
     dotnet publish Unluau.CLI/Unluau.CLI.csproj -c Release -f net9.0 -o /app/unluau-bin
 
 CMD ["npm", "start"]
