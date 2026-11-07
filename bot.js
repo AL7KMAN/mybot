@@ -65,20 +65,12 @@ async function handleVMExecution(interaction, code, detectionName) {
             result = await PythonBridge.run("wearedevs", tempIn);
         }
         
-        if (result && result.startsWith("BYTECODE_HEX:")) {
-            const hex = result.replace("BYTECODE_HEX:", "");
-            const buffer = Buffer.from(hex, "hex");
-            await interaction.editReply({
-                content: "⚠️ **Decompiler failed (Heavily protected).**\nHere is the extracted Bytecode (.luac).",
-                files: [new AttachmentBuilder(buffer, { name: "protected_script.luac" })]
-            }).catch(() => {});
-        } else if (result && result.length > 50) {
-            
+        if (result && result.length > 50) {
             let finalCode = result;
             let fileName = "deobfuscated.lua";
 
-            if (result.startsWith("=== PROTECTED BYTECODE DISASSEMBLY ===")) {
-                fileName = "disassembly.txt"; // حتى يطلع زر العرض
+            if (result.startsWith("=== MOONSEC DEOBFUSCATION REPORT ===")) {
+                fileName = "moonsec_report.txt";
             } else if (!detectionName.includes("Moonsec")) {
                 const finalDeobf = new Deobfuscator(result, { beautify: true });
                 await finalDeobf.run();
