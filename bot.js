@@ -1,4 +1,4 @@
-hereconst { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder } = require("discord.js");
 const { REST } = require("@discordjs/rest");
 const { Routes } = require("discord-api-types/v9");
 const fs = require("fs");
@@ -58,7 +58,7 @@ async function handleVMExecution(interaction, code, detectionName) {
 
     try {
         let toolName = "wearedevs";
-        if (detectionName === "Moonsec V3" || detectionName === "Moonsec V2") {
+        if (detectionName.includes("Moonsec")) {
             toolName = "moonsec";
         }
 
