@@ -2,7 +2,7 @@ FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y \
     curl git python3.12 python3-pip python3.12-venv \
-    wget default-jdk lua5.1 \
+    wget default-jdk lua5.1 unzip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
@@ -34,9 +34,10 @@ RUN mkdir -p tools && \
     git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec && \
     cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
 
-# --- تثبيت unluau (أداة فك Luau) ---
-RUN git clone https://github.com/atrexus/unluau.git /app/unluau-src && \
-    cd /app/unluau-src && \
+RUN wget https://github.com/atrexus/unluau/archive/refs/heads/master.zip -O unluau.zip && \
+    unzip unluau.zip && \
+    mv unluau-master unluau-src && \
+    cd unluau-src && \
     dotnet publish Unluau.CLI/Unluau.CLI.csproj -c Release -f net9.0 -o /app/unluau-bin
 
 CMD ["npm", "start"]
