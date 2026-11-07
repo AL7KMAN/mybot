@@ -36,6 +36,6 @@ RUN mkdir -p tools && \
 
 RUN git clone https://github.com/Voraline/unluau-binaries.git /app/unluau-src && \
     cd /app/unluau-src && \
-    dotnet publish Unluau.CLI/Unluau.CLI.csproj -c Release -f net9.0 -o /app/unluau-bin
+    dotnet publish src/Unluau.CLI/Unluau.CLI.csproj -c Release -f net9.0 -o /app/unluau-bin
 
 CMD ["npm", "start"]
