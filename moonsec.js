@@ -10,7 +10,7 @@ class MoonsecBridge {
             const unluacPath = "/root/.cargo/bin/unluac-cli";
 
             const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { 
-                timeout: 30000, 
+                timeout: 60000, 
                 killSignal: 'SIGKILL' 
             });
             
@@ -27,7 +27,7 @@ class MoonsecBridge {
                 }
 
                 const unluacProc = spawn(unluacPath, [luacFile], { 
-                    timeout: 30000, 
+                    timeout: 60000, 
                     killSignal: 'SIGKILL' 
                 });
                 
@@ -41,11 +41,23 @@ class MoonsecBridge {
                 });
 
                 unluacProc.on("close", (jCode) => {
-                    if (out.length > 50) {
+                    if (out.length > 20) {
                         resolve(out);
                     } else {
-                        const luacData = fs.readFileSync(luacFile);
-                        resolve("BYTECODE_HEX:" + luacData.toString("hex"));
+                        // إذا فشلت الأداة، نجرب نطلع أوامر الآلة كنص مقروء
+                        const disasmProc = spawn("luac5.1", ["-l", "-l", luacFile]);
+                        let disasmOut = "", disasmErr = "";
+                        disasmProc.stdout.on("data", (d) => { disasmOut += d.toString(); });
+                        disasmProc.stderr.on("data", (d) => { disasmErr += d.toString(); });
+
+                        disasmProc.on("close", () => {
+                            if (disasmOut.length > 20) {
+                                resolve("=== PROTECTED BYTECODE DISASSEMBLY ===\n\n" + disasmOut);
+                            } else {
+                                const luacData = fs.readFileSync(luacFile);
+                                resolve("BYTECODE_HEX:" + luacData.toString("hex"));
+                            }
+                        });
                     }
                 });
             });
