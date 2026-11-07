@@ -19,10 +19,8 @@ COPY . .
 
 RUN npm install
 
-# --- إضافة أداة Node.js الجديدة ---
 RUN git clone https://github.com/prostone4/Prometheus-Deobfuscator.git /app/prometheus-deobf
 RUN cd /app/prometheus-deobf && npm install
-# -----------------------------------
 
 RUN python3.12 -m venv /opt/venv
 RUN /opt/venv/bin/pip install -r requirements.txt
@@ -36,6 +34,6 @@ RUN mkdir -p tools && \
     git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec && \
     cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
 
-RUN curl -L https://github.com/HansWessels/unluac/releases/download/v1.2.3/unluac.jar -o /app/unluac.jar
+RUN curl -L -o /app/unluac.jar "https://sourceforge.net/projects/unluac/files/latest/download"
 
 CMD ["npm", "start"]
