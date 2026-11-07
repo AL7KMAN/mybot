@@ -43,13 +43,11 @@ class MoonsecBridge {
                 });
 
                 unluacProc.on("close", (jCode) => {
-                    if (jCode === null) {
-                        return reject(new Error("Unluac-rs timed out."));
-                    }
                     if (jCode === 0 && out.length > 20) {
                         resolve(out);
                     } else {
-                        reject(new Error(`Unluac-rs failed to decompile this script.`));
+                        const luacData = fs.readFileSync(luacFile);
+                        resolve("BYTECODE_HEX:" + luacData.toString("hex"));
                     }
                 });
             });
