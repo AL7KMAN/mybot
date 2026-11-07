@@ -37,7 +37,7 @@ class PythonBridge {
             if (tool === "moonsec") {
                 const luacFile = inputFile + ".luac";
                 const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
-                const unluacPath = path.join(__dirname, "unluac.jar");
+                const unluauPath = path.join(__dirname, "unluau-bin/Unluau.CLI");
 
                 const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { timeout: 120000 });
                 let stderr = "";
@@ -48,22 +48,24 @@ class PythonBridge {
                         return reject(new Error(`Moonsec DLL Error (${code}): ${stderr.slice(-800)}`));
                     }
 
-                    const javaProc = spawn("java", ["-jar", unluacPath, luacFile], { timeout: 120000 });
+                    // استخدام unluau بدلاً من unluac
+                    const unluauProc = spawn("dotnet", [unluauPath, luacFile, "-o", inputFile + ".deobf.lua"], { timeout: 120000 });
                     let out = "", err = "";
-                    javaProc.stdout.on("data", (data) => { out += data.toString(); });
-                    javaProc.stderr.on("data", (data) => { err += data.toString(); });
+                    unluauProc.stdout.on("data", (data) => { out += data.toString(); });
+                    unluauProc.stderr.on("data", (data) => { err += data.toString(); });
 
-                    javaProc.on("close", (jCode) => {
-                        if (jCode === 0 && out.length > 20) {
-                            resolve(this.stripAnsi(out));
+                    unluauProc.on("close", (jCode) => {
+                        const resultPath = inputFile + ".deobf.lua";
+                        if (jCode === 0 && fs.existsSync(resultPath)) {
+                            resolve(fs.readFileSync(resultPath, "utf-8"));
                         } else {
-                            reject(new Error(`Unluac Error (${jCode}): ${err.slice(-800)}`));
+                            reject(new Error(`Unluau Error (${jCode}): ${err.slice(-800)}`));
                         }
                     });
                 });
                 return;
             }
-
+            
             let cmd, args, options;
             if (tool === "prometheus") {
                 cmd = "/opt/venv/bin/python3";
