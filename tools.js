@@ -35,7 +35,7 @@ class PythonBridge {
             }
 
             if (tool === "moonsec") {
-                return reject(new Error("Moonsec is now handled by MoonsecBridge. Pipeline should not call this."));
+                return reject(new Error("Moonsec is now handled by MoonsecBridge."));
             }
 
             let cmd, args, options;
