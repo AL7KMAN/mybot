@@ -75,19 +75,21 @@ async function handleVMExecution(interaction, code, detectionName) {
         } else if (result && result.length > 50) {
             
             let finalCode = result;
-            
-            if (!detectionName.includes("Moonsec")) {
+            let fileName = "deobfuscated.lua";
+
+            if (result.startsWith("=== PROTECTED BYTECODE DISASSEMBLY ===")) {
+                fileName = "disassembly.txt"; // حتى يطلع زر العرض
+            } else if (!detectionName.includes("Moonsec")) {
                 const finalDeobf = new Deobfuscator(result, { beautify: true });
                 await finalDeobf.run();
                 finalCode = finalDeobf.code;
             }
             
             const buffer = Buffer.from(finalCode, "utf-8");
-            let previewContent = finalCode.length > 1800 ? finalCode.slice(0, 1800) + "\n... (Truncated)" : finalCode;
             
             await interaction.editReply({
-                content: `✅ **Extracted Code:**\n\`\`\`lua\n${previewContent}\n\`\`\``,
-                files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
+                content: `✅ **Extracted output!**`,
+                files: [new AttachmentBuilder(buffer, { name: fileName })]
             }).catch(() => {});
             
         } else {
@@ -115,11 +117,9 @@ async function handleStandardDeobfuscation(interaction, code, detectionName) {
             const finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
             const finalName = pipelineResult.isClean ? "deobfuscated_clean.lua" : "extracted_partial.lua";
             const toolsStr = pipelineResult.tools.join(" ➔ ");
-            
-            let previewContent = pipelineResult.code.length > 1800 ? pipelineResult.code.slice(0, 1800) + "\n... (Truncated)" : pipelineResult.code;
             const statusMsg = pipelineResult.isClean
-                ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\`\n\`\`\`lua\n${previewContent}\n\`\`\``
-                : `⚠️ **Partial Extraction.**\n🧠 Pipeline: \`${toolsStr}\`\n\`\`\`lua\n${previewContent}\n\`\`\``;
+                ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\``
+                : `⚠️ **Partial Extraction.**\n🧠 Pipeline: \`${toolsStr}\``;
                 
             await interaction.editReply({ content: statusMsg, files: [new AttachmentBuilder(finalBuffer, { name: finalName })] }).catch(() => {});
         } else {
