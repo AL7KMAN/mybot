@@ -7,27 +7,49 @@ class MoonsecBridge {
         return new Promise((resolve, reject) => {
             const luacFile = inputFile + ".luac";
             const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
-            const unluacPath = path.join(__dirname, "unluac.jar");
+            const unluacPath = "/root/.cargo/bin/unluac-cli";
 
-            const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { timeout: 120000 });
+            const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { 
+                timeout: 60000, 
+                killSignal: 'SIGKILL' 
+            });
+            
             let stderr = "";
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
+            
+            proc.on("error", (err) => {
+                reject(new Error(`Failed to start Moonsec: ${err.message}`));
+            });
 
             proc.on("close", (code) => {
+                if (code === null) {
+                    return reject(new Error("Moonsec timed out."));
+                }
                 if (code !== 0 || !fs.existsSync(luacFile)) {
-                    return reject(new Error(`Moonsec DLL Error (${code}): ${stderr.slice(-800)}`));
+                    return reject(new Error(`Moonsec failed: ${stderr.slice(-500)}`));
                 }
 
-                const javaProc = spawn("java", ["-jar", unluacPath, luacFile], { timeout: 120000 });
+                const unluacProc = spawn(unluacPath, [luacFile], { 
+                    timeout: 60000, 
+                    killSignal: 'SIGKILL' 
+                });
+                
                 let out = "", err = "";
-                javaProc.stdout.on("data", (data) => { out += data.toString(); });
-                javaProc.stderr.on("data", (data) => { err += data.toString(); });
+                unluacProc.stdout.on("data", (data) => { out += data.toString(); });
+                unluacProc.stderr.on("data", (data) => { err += data.toString(); });
 
-                javaProc.on("close", (jCode) => {
+                unluacProc.on("error", (jErr) => {
+                    reject(new Error(`Failed to start unluac-rs: ${jErr.message}`));
+                });
+
+                unluacProc.on("close", (jCode) => {
+                    if (jCode === null) {
+                        return reject(new Error("Unluac-rs timed out."));
+                    }
                     if (jCode === 0 && out.length > 20) {
                         resolve(out);
                     } else {
-                        reject(new Error(`Unluac Error (${jCode}): ${err.slice(-800)}`));
+                        reject(new Error(`Unluac-rs failed to decompile this script.`));
                     }
                 });
             });
