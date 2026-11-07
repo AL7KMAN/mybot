@@ -39,6 +39,7 @@ RUN wget https://codeload.github.com/atrexus/unluau/tar.gz/refs/heads/master -O 
     mv unluau-master unluau-src && \
     cd unluau-src && \
     sed -i 's/<TargetFramework>.*<\/TargetFramework>/<TargetFramework>net9.0<\/TargetFramework>/g' src/Unluau.CLI/Unluau.CLI.csproj && \
-    dotnet publish src/Unluau.CLI/Unluau.CLI.csproj -c Release -f net9.0 -r linux-x64 --self-contained false -p:PublishSingleFile=true -o /app/unluau-bin
+    dotnet publish src/Unluau.CLI/Unluau.CLI.csproj -c Release -f net9.0 -r linux-x64 --self-contained false -p:PublishSingleFile=true -o /app/unluau-bin && \
+    chmod +x /app/unluau-bin/Unluau.CLI
 
 CMD ["npm", "start"]
