@@ -34,6 +34,9 @@ RUN mkdir -p tools && \
     git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec && \
     cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
 
-RUN curl -L -o /app/unluac.jar "https://sourceforge.net/projects/unluac/files/latest/download"
+# --- تثبيت unluau (أداة فك Luau) ---
+RUN git clone https://github.com/atrexus/unluau.git /app/unluau-src && \
+    cd /app/unluau-src && \
+    dotnet publish Unluau.CLI/Unluau.CLI.csproj -c Release -f net9.0 -o /app/unluau-bin
 
 CMD ["npm", "start"]
