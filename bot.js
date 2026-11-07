@@ -65,7 +65,14 @@ async function handleVMExecution(interaction, code, detectionName) {
             result = await PythonBridge.run("wearedevs", tempIn);
         }
         
-        if (result && result.length > 50 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
+        if (result && result.startsWith("BYTECODE_HEX:")) {
+            const hex = result.replace("BYTECODE_HEX:", "");
+            const buffer = Buffer.from(hex, "hex");
+            await interaction.editReply({
+                content: "⚠️ **Decompiler failed (Script is heavily protected).**\nHere is the extracted Bytecode (.luac). You can try decompiling it externally.",
+                files: [new AttachmentBuilder(buffer, { name: "protected_script.luac" })]
+            }).catch(() => {});
+        } else if (result && result.length > 50 && !result.includes("local Constants") && !result.includes("UNPACK CALLED")) {
             const finalDeobf = new Deobfuscator(result, { beautify: true });
             await finalDeobf.run();
             
