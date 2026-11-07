@@ -37,7 +37,7 @@ class PythonBridge {
             if (tool === "moonsec") {
                 const luacFile = inputFile + ".luac";
                 const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
-                const unluauPath = path.join(__dirname, "unluau-bin/Unluau.CLI.dll");
+                const unluacPath = path.join(__dirname, "unluac.jar");
 
                 const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { timeout: 120000 });
                 let stderr = "";
@@ -48,17 +48,16 @@ class PythonBridge {
                         return reject(new Error(`Moonsec DLL Error (${code}): ${stderr.slice(-800)}`));
                     }
 
-                    const unluauProc = spawn("dotnet", [unluauPath, luacFile, "-o", inputFile + ".deobf.lua"], { timeout: 120000 });
+                    const javaProc = spawn("java", ["-jar", unluacPath, luacFile], { timeout: 120000 });
                     let out = "", err = "";
-                    unluauProc.stdout.on("data", (data) => { out += data.toString(); });
-                    unluauProc.stderr.on("data", (data) => { err += data.toString(); });
+                    javaProc.stdout.on("data", (data) => { out += data.toString(); });
+                    javaProc.stderr.on("data", (data) => { err += data.toString(); });
 
-                    unluauProc.on("close", (jCode) => {
-                        const resultPath = inputFile + ".deobf.lua";
-                        if (jCode === 0 && fs.existsSync(resultPath)) {
-                            resolve(fs.readFileSync(resultPath, "utf-8"));
+                    javaProc.on("close", (jCode) => {
+                        if (jCode === 0 && out.length > 20) {
+                            resolve(this.stripAnsi(out));
                         } else {
-                            reject(new Error(`Unluau Error (${jCode}): ${err.slice(-800)}`));
+                            reject(new Error(`Unluac Error (${jCode}): ${err.slice(-800)}`));
                         }
                     });
                 });
