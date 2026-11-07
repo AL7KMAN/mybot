@@ -1,9 +1,137 @@
 const fetch = require("node-fetch");
+const { spawn } = require("child_process");
+const path = require("path");
+const fs = require("fs");
+const { LuaFactory } = require('wasmoon');
 
 class Logger {
     static log(level, msg, data = {}) {
         const colors = { INFO: "\x1b[36m", WARN: "\x1b[33m", ERROR: "\x1b[31m", SUCCESS: "\x1b[32m", DEBUG: "\x1b[35m" };
         console.log(`${colors[level] || "\x1b[0m"}[${level}] ${msg}\x1b[0m`, data);
+    }
+}
+
+class PythonBridge {
+    static stripAnsi(str) {
+        return str.replace(/\x1b\[[0-9;]*m/g, '').replace(/\[\d+m/g, '');
+    }
+    static async run(tool, inputFile) {
+        return new Promise((resolve, reject) => {
+            let cmd, args;
+            if (tool === "prometheus") {
+                cmd = "/opt/venv/bin/python3";
+                args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
+            } else if (tool === "wearedevs") {
+                cmd = "/opt/venv/bin/python3";
+                args = [path.join(__dirname, "tools/wearedevs/deobfuscator.py"), inputFile];
+            } else if (tool === "moonsec") {
+                cmd = "dotnet";
+                args = [path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
+            } else {
+                return reject(new Error("Unknown tool"));
+            }
+            const proc = spawn(cmd, args, { timeout: 120000 });
+            let stdout = "";
+            let stderr = "";
+            proc.stdout.on("data", (data) => { stdout += data.toString(); });
+            proc.stderr.on("data", (data) => { stderr += data.toString(); });
+            proc.on("close", (code) => {
+                if (code === 0) {
+                    if (tool === "moonsec") {
+                        try {
+                            const luacData = fs.readFileSync(inputFile + ".luac");
+                            resolve("BYTECODE_HEX:" + luacData.toString("hex"));
+                        } catch (e) {
+                            reject(new Error("Failed to read Moonsec output"));
+                        }
+                    } else {
+                        resolve(this.stripAnsi(stdout) || "Success");
+                    }
+                } else {
+                    const errMsg = this.stripAnsi(stderr || "Unknown error").slice(0, 1500);
+                    reject(new Error(`Tool Error (${code}): ${errMsg}`));
+                }
+            });
+        });
+    }
+
+    static async runUnluac(luacPath) {
+        return new Promise((resolve, reject) => {
+            const proc = spawn("java", ["-jar", path.join(__dirname, "unluac.jar"), luacPath], { timeout: 60000 });
+            let stdout = "";
+            let stderr = "";
+            proc.stdout.on("data", (data) => { stdout += data.toString(); });
+            proc.stderr.on("data", (data) => { stderr += data.toString(); });
+            proc.on("close", (code) => {
+                if (code === 0) {
+                    resolve(stdout);
+                } else {
+                    reject(new Error(`unluac Error: ${stderr}`));
+                }
+            });
+        });
+    }
+}
+
+class LuaSandbox {
+    static async run(code) {
+        const factory = new LuaFactory();
+        const lua = await factory.createEngine();
+        const logs = [];
+        try {
+            const processedCode = code.replace(/0b([01]+)/g, (match, bin) => parseInt(bin, 2).toString());
+            
+            const fakeInstance = (className) => ({
+                ClassName: className, Name: className, Parent: null, Visible: true,
+                Position: { X: 0, Y: 0, Z: 0 }, Size: { X: 0, Y: 0, Z: 0 },
+                Children: [], FindFirstChild: function() { return this; },
+                WaitForChild: function() { return this; }, GetChildren: function() { return []; },
+                IsA: function() { return true; }, Destroy: function() {},
+                Clone: function() { return this; }, SetAttribute: function() {},
+                GetAttribute: function() { return null; },
+                Connect: function() { return { Disconnect: function() {} }; }
+            });
+
+            const fakeEnv = {
+                game: {
+                    GetService: (name) => { logs.push(`[GETSERVICE] ${name}`); return fakeInstance(name); },
+                    HttpGet: (url) => { logs.push(`[HTTPGET] ${url}`); return "-- sandbox block"; },
+                    IsLoaded: () => true, PlaceId: 123456, JobId: "sandbox-123"
+                },
+                workspace: fakeInstance("Workspace"),
+                script: fakeInstance("Script"),
+                Instance: { new: (type) => { logs.push(`[INSTANCE] ${type}`); return fakeInstance(type); } },
+                loadstring: (src) => { logs.push(`[LOADSTRING]`); return () => {}; },
+                print: (...args) => { logs.push(`[PRINT] ${args.join(' ')}`); },
+                warn: (...args) => { logs.push(`[WARN] ${args.join(' ')}`); },
+                error: (...args) => { logs.push(`[ERROR] ${args.join(' ')}`); throw new Error(args[0]); },
+                task: { wait: () => {}, spawn: (f) => { try { f(); } catch(e){} }, delay: (t, f) => {} },
+                getfenv: () => fakeEnv, setfenv: (f, env) => f,
+                newproxy: () => ({}), setmetatable: (t, mt) => t, getmetatable: (t) => null,
+                rawget: (t, k) => t ? t[k] : null, rawset: (t, k, v) => { if (t) t[k] = v; return t; },
+                unpack: (t) => Object.values(t || {}), typeof: (v) => typeof v === "object" ? "Instance" : typeof v,
+                wait: () => {}, tick: () => Date.now(),
+                Vector3: { new: (x, y, z) => ({ X: x, Y: y, Z: z }) },
+                Vector2: { new: (x, y) => ({ X: x, Y: y }) },
+                CFrame: { new: (x, y, z) => ({ X: x || 0, Y: y || 0, Z: z || 0 }) },
+                UDim2: { new: (xs, xo, ys, yo) => ({ X: { Scale: xs, Offset: xo }, Y: { Scale: ys, Offset: yo } }) },
+                UDim: { new: (s, o) => ({ Scale: s, Offset: o }) },
+                Color3: { fromRGB: (r, g, b) => ({ R: r, G: g, B: b }), new: (r, g, b) => ({ R: r, G: g, B: b }) },
+                Enum: new Proxy({}, { get: () => new Proxy({}, { get: (t, k) => k }) })
+            };
+            
+            for (const [key, val] of Object.entries(fakeEnv)) { try { lua.global.set(key, val); } catch(e) {} }
+            
+            const execute = lua.doString(processedCode);
+            const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Sandbox execution timed out")), 4000));
+            await Promise.race([execute, timeout]);
+            
+            return logs.length > 0 ? logs.join('\n') : "Sandbox executed successfully, but no logs were captured.";
+        } catch (e) {
+            return logs.join('\n') + `\n[SANDBOX_ERROR] ${e.message}`;
+        } finally {
+            try { lua.global.close(); } catch(e) {}
+        }
     }
 }
 
@@ -14,6 +142,7 @@ class WeAreDevs {
         const safePrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const reStr = "([\"'])" + safePrefix + "([A-Za-z0-9!#$%&()*+,\\-.\\/:;<=>?@\\[\\]^_`{|}~]+)\\1";
         const regex = new RegExp(reStr, "g");
+        
         const newCode = code.replace(regex, (match, quote, b85) => {
             const dec = Base85.decode(b85, alphabet);
             if (dec && Decoders.isPrintable(dec)) {
@@ -823,29 +952,33 @@ class Deobfuscator {
         this.stats.layerCount = this.layers.length;
 
         if (this.detection.name === "WeAreDevs") {
+            this.log.push("WeAreDevs - extracting alphabet");
             const extracted = Base85.extractAlphabet(this.code);
             if (extracted) {
                 this.alphabet = extracted;
                 this.stats.extractedAlphabet = true;
+                this.log.push("alphabet extracted (85 chars)");
+            } else {
+                this.alphabet = WeAreDevs.ALPHA_V1;
+                this.log.push("using fallback alphabet");
             }
-            if (this.alphabet) {
-                for (let pass = 0; pass < 5; pass++) {
-                    let total = 0;
-                    const r = WeAreDevs.replaceAll(this.code, this.alphabet, "j");
+            for (let pass = 0; pass < 5; pass++) {
+                let total = 0;
+                for (const prefix of ["j", "^"]) {
+                    const r = WeAreDevs.replaceAll(this.code, this.alphabet, prefix);
                     total += r.count;
                     this.code = r.code;
-                    const r2 = WeAreDevs.replaceAll(this.code, this.alphabet, "^");
-                    total += r2.count;
-                    this.code = r2.code;
-                    if (total === 0) break;
-                    this.stats.wearedevsDecoded += total;
                 }
+                if (total === 0) break;
+                this.stats.wearedevsDecoded += total;
+                this.stats.alphabetPasses++;
+                this.log.push(`pass ${pass + 1}: ${total} strings`);
             }
         }
 
         this.stringTableAnalyzer.findTables();
 
-        for (let pass = 0; pass < 100; pass++) {
+        for (let pass = 0; pass < 50; pass++) {
             let changed = false;
             this.stats.loops++;
             
@@ -923,7 +1056,81 @@ class Deobfuscator {
     }
 
     stripComments() {
-        this.code = this.code.replace(/--\[=*\[[\s\S]*?\]=*\]/g, "").replace(/--\[\[[\s\S]*?\]\]/g, "").replace(/--[^\n\r]*/g, "");
+        let result = "";
+        let i = 0;
+        const code = this.code;
+        const len = code.length;
+        
+        while (i < len) {
+            const char = code[i];
+            const nextChar = code[i + 1];
+            
+            if (char === '"' || char === "'") {
+                const quote = char;
+                let j = i + 1;
+                while (j < len) {
+                    if (code[j] === '\\') {
+                        j += 2;
+                    } else if (code[j] === quote) {
+                        j++;
+                        break;
+                    } else {
+                        j++;
+                    }
+                }
+                result += code.slice(i, j);
+                i = j;
+                continue;
+            }
+            
+            if (char === '[') {
+                let eqCount = 0;
+                let j = i + 1;
+                while (code[j] === '=') {
+                    eqCount++;
+                    j++;
+                }
+                if (code[j] === '[') {
+                    const closeStr = ']' + '='.repeat(eqCount) + ']';
+                    const endIdx = code.indexOf(closeStr, j + 1);
+                    if (endIdx !== -1) {
+                        result += code.slice(i, endIdx + closeStr.length);
+                        i = endIdx + closeStr.length;
+                        continue;
+                    }
+                }
+            }
+            
+            if (char === '-' && nextChar === '-') {
+                let k = i + 2;
+                let eqCount = 0;
+                while (code[k] === '=') {
+                    eqCount++;
+                    k++;
+                }
+                if (code[k] === '[') {
+                    const closeStr = ']' + '='.repeat(eqCount) + ']';
+                    const endIdx = code.indexOf(closeStr, k + 1);
+                    if (endIdx !== -1) {
+                        i = endIdx + closeStr.length;
+                        continue;
+                    }
+                }
+                
+                let endIdx = code.indexOf('\n', i);
+                if (endIdx === -1) {
+                    i = len;
+                } else {
+                    i = endIdx;
+                }
+                continue;
+            }
+            
+            result += char;
+            i++;
+        }
+        
+        this.code = result;
     }
 
     decodeEscapes() {
@@ -1065,9 +1272,11 @@ class Deobfuscator {
         const alphabets = CustomBase64.extractAlphabets(this.code);
         if (alphabets.length === 0) return;
         this.stats.customB64Alphabets = alphabets.length;
+        this.log.push(`custom base64 alphabets: ${alphabets.length}`);
         
         const tables = CustomBase64.findStringTables(this.code);
         if (tables.length === 0) return;
+        this.log.push(`string tables found: ${tables.length}`);
         
         for (const table of tables) {
             const alphabet = alphabets[0].alphabet;
@@ -1087,6 +1296,7 @@ class Deobfuscator {
                 this.customB64Results.push({ tableName: table.name, alphabetName: alphabets[0].name, strings: decoded });
             }
         }
+        if (this.stats.customB64Decoded > 0) this.log.push(`custom b64 decoded: ${this.stats.customB64Decoded} strings`);
     }
 
     simplifyMath() {
@@ -1120,6 +1330,7 @@ class Deobfuscator {
             }
             if (!changed) break;
         }
+        if (this.stats.mathSimplified > 0) this.log.push(`math: ${this.stats.mathSimplified}`);
     }
 
     resolveStringRefs() {
@@ -1136,6 +1347,7 @@ class Deobfuscator {
                 return m;
             });
         }
+        if (this.stats.stringRefsResolved > 0) this.log.push(`refs: ${this.stats.stringRefsResolved}`);
         return changed;
     }
 
@@ -1158,6 +1370,7 @@ class Deobfuscator {
             const dec = Decoders.xorBrute(inner);
             if (dec) { this.xorResults.push({ input: inner.slice(0, 40), results: [{ key: "auto", sample: dec.slice(0, 150), confidence: 10 }] }); this.stats.xorDecoded++; }
         }
+        if (this.stats.xorDecoded > 0) this.log.push(`xor candidates: ${this.stats.xorDecoded}`);
     }
 
     extractUrls() {
@@ -1168,6 +1381,7 @@ class Deobfuscator {
     extractWebhooks() {
         const m = this.code.match(/discord(?:app)?\.com\/api\/webhooks\/[^\s"'`]+/g) || [];
         this.webhooks = [...new Set(m)].slice(0, 15);
+        if (this.webhooks.length > 0) this.warnings.push(`${this.webhooks.length} webhook(s)`);
     }
 
     extractKeys() {
@@ -1181,6 +1395,7 @@ class Deobfuscator {
             while ((m = re.exec(this.code)) !== null) this.keys.push(m[1].slice(0, 50));
         }
         this.keys = [...new Set(this.keys)].slice(0, 15);
+        if (this.keys.length > 0) this.warnings.push(`${this.keys.length} possible key(s)`);
     }
 
     calculateEntropy() {
@@ -1190,6 +1405,7 @@ class Deobfuscator {
         const len = this.code.length;
         for (const c of Object.values(freq)) { const p = c / len; e -= p * Math.log2(p); }
         this.stats.entropy = parseFloat((e / 8).toFixed(3));
+        if (e / 8 > 0.7) this.warnings.push(`High entropy (${this.stats.entropy})`);
     }
 
     beautify() {
@@ -1350,6 +1566,8 @@ function buildReport(result) {
 
 module.exports = {
     Logger,
+    PythonBridge,
+    LuaSandbox,
     Base85,
     CustomBase64,
     Decoders,
