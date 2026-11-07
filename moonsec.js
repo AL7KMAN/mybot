@@ -7,7 +7,7 @@ class MoonsecBridge {
         return new Promise((resolve, reject) => {
             const luacFile = inputFile + ".luac";
             const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
-            const unluauPath = path.join(__dirname, "unluau-bin/Unluau.CLI.dll");
+            const unluauPath = path.join(__dirname, "unluau-bin/Unluau.CLI");
 
             const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { timeout: 120000 });
             let stderr = "";
@@ -18,7 +18,7 @@ class MoonsecBridge {
                     return reject(new Error(`Moonsec DLL Error (${code}): ${stderr.slice(-800)}`));
                 }
 
-                const unluauProc = spawn("dotnet", [unluauPath, luacFile, "-o", inputFile + ".deobf.lua"], { timeout: 120000 });
+                const unluauProc = spawn(unluauPath, [luacFile, "-o", inputFile + ".deobf.lua"], { timeout: 120000 });
                 let out = "", err = "";
                 unluauProc.stdout.on("data", (data) => { out += data.toString(); });
                 unluauProc.stderr.on("data", (data) => { err += data.toString(); });
