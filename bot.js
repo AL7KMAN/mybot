@@ -59,7 +59,7 @@ async function handleVMExecution(interaction, code, detectionName) {
 
     try {
         let result = "";
-        if (detectionName.includes("Moonsec")) {
+        if (detectionName.includes("Moonsec") || code.includes("MoonSec")) {
             result = await MoonsecBridge.run(tempIn);
         } else {
             result = await PythonBridge.run("wearedevs", tempIn);
