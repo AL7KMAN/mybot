@@ -59,7 +59,7 @@ async function handleVMExecution(interaction, code, detectionName) {
 
     try {
         let result = "";
-        if (detectionName.includes("Moonsec") || code.includes("MoonSec")) {
+        if (detectionName.includes("Moonsec")) {
             result = await MoonsecBridge.run(tempIn);
         } else {
             result = await PythonBridge.run("wearedevs", tempIn);
@@ -179,4 +179,4 @@ Logger.log("INFO", "Starting bot V5...");
 client.login(TOKEN).catch((error) => {
     Logger.log("ERROR", "Login Failed", { error: error.message });
     process.exit(1);
-});
+});ص
