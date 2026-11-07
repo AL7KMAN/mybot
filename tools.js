@@ -4,7 +4,7 @@ const fs = require("fs");
 
 class PythonBridge {
     static stripAnsi(str) {
-        return str.replace(/\x1b\[[0-9;]*m/g, "").replace(/\[\d+m/g, "");
+        return str.replace(/\x1b\[[0-9;]*m/g, '').replace(/\[\d+m/g, '');
     }
 
     static async run(tool, inputFile) {
@@ -34,14 +34,40 @@ class PythonBridge {
                 return;
             }
 
+            if (tool === "moonsec") {
+                const luacFile = inputFile + ".luac";
+                const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
+                const unluacPath = path.join(__dirname, "unluac.jar");
+
+                const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { timeout: 120000 });
+                let stderr = "";
+                proc.stderr.on("data", (data) => { stderr += data.toString(); });
+
+                proc.on("close", (code) => {
+                    if (code !== 0 || !fs.existsSync(luacFile)) {
+                        return reject(new Error(`Moonsec DLL Error (${code}): ${stderr.slice(-800)}`));
+                    }
+
+                    const javaProc = spawn("java", ["-jar", unluacPath, luacFile], { timeout: 120000 });
+                    let out = "", err = "";
+                    javaProc.stdout.on("data", (data) => { out += data.toString(); });
+                    javaProc.stderr.on("data", (data) => { err += data.toString(); });
+
+                    javaProc.on("close", (jCode) => {
+                        if (jCode === 0 && out.length > 20) {
+                            resolve(this.stripAnsi(out));
+                        } else {
+                            reject(new Error(`Unluac Error (${jCode}): ${err.slice(-800)}`));
+                        }
+                    });
+                });
+                return;
+            }
+
             let cmd, args, options;
             if (tool === "prometheus") {
                 cmd = "/opt/venv/bin/python3";
                 args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
-                options = { timeout: 60000 };
-            } else if (tool === "moonsec") {
-                cmd = "dotnet";
-                args = [path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll"), "-dev", "-i", inputFile, "-o", inputFile + ".luac"];
                 options = { timeout: 60000 };
             } else {
                 return reject(new Error("Unknown tool"));
@@ -55,16 +81,7 @@ class PythonBridge {
             
             proc.on("close", (code) => {
                 if (code === 0) {
-                    if (tool === "moonsec") {
-                        try {
-                            const luacData = fs.readFileSync(inputFile + ".luac");
-                            resolve("BYTECODE_HEX:" + luacData.toString("hex"));
-                        } catch (e) {
-                            reject(new Error("Failed to read Moonsec output"));
-                        }
-                    } else {
-                        resolve(this.stripAnsi(stdout) || "Success");
-                    }
+                    resolve(this.stripAnsi(stdout) || "Success");
                 } else {
                     reject(new Error(`Tool Error (${code}): ${this.stripAnsi(stderr).slice(-1500)}`));
                 }
