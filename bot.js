@@ -179,4 +179,4 @@ Logger.log("INFO", "Starting bot V5...");
 client.login(TOKEN).catch((error) => {
     Logger.log("ERROR", "Login Failed", { error: error.message });
     process.exit(1);
-});ضص
+});
