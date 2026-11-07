@@ -68,10 +68,54 @@ async function handleVMExecution(interaction, code, detectionName) {
             const finalDeobf = new Deobfuscator(result, { beautify: true });
             await finalDeobf.run();
             
+            let extraContent = "";
+            let extraFiles = [];
+
+            if (finalDeobf.urls.length > 0) {
+                extraContent += `\n\n🔗 **Detected Remote Script URLs:**\n`;
+                for (const url of finalDeobf.urls) {
+                    extraContent += `- \`${url}\`\n`;
+                }
+                
+                for (let i = 0; i < finalDeobf.urls.length; i++) {
+                    const url = finalDeobf.urls[i];
+                    const cleanUrl = url.replace(/"/g, "%22").replace(/'/g, "%27").replace(/ /g, "%20");
+                    try {
+                        extraContent += `\n⏳ **Auto-fetching payload ${i+1}...**\n`;
+                        const fetched = await fetchCodeFromUrl(cleanUrl);
+                        const innerBuffer = Buffer.from(fetched, "utf-8");
+                        extraFiles.push(new AttachmentBuilder(innerBuffer, { name: `fetched_payload_${i+1}_raw.lua` }));
+                        
+                        const innerDetect = new Detector(fetched).detect();
+                        if (innerDetect.name !== "Clean" && (innerDetect.name.includes("WeAreDevs") || innerDetect.name.includes("Moonsec") || innerDetect.name.includes("Prometheus"))) {
+                            extraContent += `⚙️ **Payload ${i+1} is obfuscated (${innerDetect.name}). Deobfuscating...**\n`;
+                            let innerTool = "wearedevs";
+                            if (innerDetect.name.includes("Moonsec")) innerTool = "moonsec";
+                            
+                            const innerTempIn = path.join(tempDir, `inner_input_${i+1}.lua`);
+                            fs.writeFileSync(innerTempIn, fetched);
+                            const innerResult = await PythonBridge.run(innerTool, innerTempIn);
+                            
+                            if (innerResult && innerResult.length > 50) {
+                                const innerFinal = new Deobfuscator(innerResult, { beautify: true });
+                                await innerFinal.run();
+                                const innerCleanBuffer = Buffer.from(innerFinal.code, "utf-8");
+                                extraFiles.push(new AttachmentBuilder(innerCleanBuffer, { name: `fetched_payload_${i+1}_clean.lua` }));
+                                extraContent += `✅ **Successfully deobfuscated payload ${i+1}!**\n`;
+                            }
+                        } else {
+                            extraContent += `✅ **Payload ${i+1} is already clean.**\n`;
+                        }
+                    } catch(e) {
+                         extraContent += `\n⚠️ **Failed to auto-download URL ${i+1}:** ${e.message}`;
+                    }
+                }
+            }
+
             const buffer = Buffer.from(finalDeobf.code, "utf-8");
             await interaction.editReply({
-                content: `✅ **Extracted clean payload via ${toolName}!**`,
-                files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
+                content: `✅ **Extracted clean payload via ${toolName}!**${extraContent}`,
+                files: [new AttachmentBuilder(buffer, { name: "deobfuscated_loader.lua" }), ...extraFiles]
             });
         } else {
             const report = `=== DIAGNOSTICS ===\n\nOutput:\n${result ? result.slice(0, 5000) : 'None'}`;
