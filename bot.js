@@ -66,12 +66,8 @@ async function handleVMExecution(interaction, code, detectionName) {
         }
         
         if (result && result.isBytecode) {
-            let msg = "⚠️ **Decompiler failed (Advanced VM Protection).**\nHere is the extracted Bytecode (.luac). Upload it to an online decompiler.";
-            if (result.logs) {
-                msg += `\n\n**Sandbox Logs:**\n\`\`\`\n${result.logs.slice(0, 1000)}\n\`\`\``;
-            }
             await interaction.editReply({
-                content: msg,
+                content: "⚠️ **Decompiler failed (Advanced VM Protection).**\nHere is the extracted Bytecode (.luac). Upload it to an online decompiler.",
                 files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })]
             }).catch(() => {});
         } else if (result && result.text) {
