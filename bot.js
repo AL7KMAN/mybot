@@ -73,16 +73,16 @@ async function handleVMExecution(interaction, code, detectionName) {
             await interaction.editReply({
                 content: `✅ **Extracted clean payload!**`,
                 files: [new AttachmentBuilder(buffer, { name: "deobfuscated.lua" })]
-            });
+            }).catch(() => {});
         } else {
             const report = `=== DIAGNOSTICS ===\n\nOutput:\n${result ? result.slice(0, 5000) : 'None'}`;
             await interaction.editReply({
                 content: "❌ **Failed to extract clean code.** Diagnostics attached:",
                 files: [new AttachmentBuilder(Buffer.from(report, "utf-8"), { name: "diagnostics.txt" })]
-            });
+            }).catch(() => {});
         }
     } catch (err) {
-        await interaction.editReply({ content: `❌ **Error:** \`${err.message}\`` });
+        await interaction.editReply({ content: `❌ **Error:** \`${err.message}\`` }).catch(() => {});
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -102,12 +102,12 @@ async function handleStandardDeobfuscation(interaction, code, detectionName) {
             const statusMsg = pipelineResult.isClean
                 ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\``
                 : `⚠️ **Partial Extraction.**\n🧠 Pipeline: \`${toolsStr}\``;
-            await interaction.editReply({ content: statusMsg, files: [new AttachmentBuilder(finalBuffer, { name: finalName })] });
+            await interaction.editReply({ content: statusMsg, files: [new AttachmentBuilder(finalBuffer, { name: finalName })] }).catch(() => {});
         } else {
-            await interaction.editReply({ content: "❌ **Pipeline failed.** All tools exhausted." });
+            await interaction.editReply({ content: "❌ **Pipeline failed.** All tools exhausted." }).catch(() => {});
         }
     } catch (err) {
-        await interaction.editReply({ content: `❌ **Pipeline crashed:** \`${err.message}\`` });
+        await interaction.editReply({ content: `❌ **Pipeline crashed:** \`${err.message}\`` }).catch(() => {});
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -179,4 +179,4 @@ Logger.log("INFO", "Starting bot V5...");
 client.login(TOKEN).catch((error) => {
     Logger.log("ERROR", "Login Failed", { error: error.message });
     process.exit(1);
-});ص
+});
