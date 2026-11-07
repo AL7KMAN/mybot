@@ -37,7 +37,7 @@ class PythonBridge {
             if (tool === "moonsec") {
                 const luacFile = inputFile + ".luac";
                 const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
-                const unluauPath = path.join(__dirname, "unluau-bin/Unluau.CLI");
+                const unluauPath = path.join(__dirname, "unluau-bin/Unluau.CLI.dll");
 
                 const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { timeout: 120000 });
                 let stderr = "";
@@ -48,7 +48,6 @@ class PythonBridge {
                         return reject(new Error(`Moonsec DLL Error (${code}): ${stderr.slice(-800)}`));
                     }
 
-                    // استخدام unluau بدلاً من unluac
                     const unluauProc = spawn("dotnet", [unluauPath, luacFile, "-o", inputFile + ".deobf.lua"], { timeout: 120000 });
                     let out = "", err = "";
                     unluauProc.stdout.on("data", (data) => { out += data.toString(); });
