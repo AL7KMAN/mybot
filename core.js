@@ -1010,11 +1010,32 @@ class Deobfuscator {
         this.extractWebhooks();
         this.extractKeys();
         this.calculateEntropy();
+        
+        this.fixTraceArtifacts();
 
         if (this.opts.beautify !== false) this.beautify();
         this.stats.finalSize = this.code.length;
         this.stats.finalLines = this.code.split("\n").length;
         this.log.push(`done: ${this.code.length} bytes`);
+    }
+
+    fixTraceArtifacts() {
+        if (!this.code) return;
+        this.code = this.code.replace(/function\s*\(([^)]*)\)\s*(x[0-9a-fA-F]{6,})/g, 'function($1)');
+        this.code = this.code.replace(/:connect\(/g, ':Connect(');
+        this.code = this.code.replace(/:wait\(/g, ':Wait(');
+        const localGuis = [...this.code.matchAll(/local\s+(\w+)\s*=\s*Instance\.new\(["'](?:Frame|TextButton|TextLabel|ScreenGui)["']\)/g)].map(m => m[1]);
+        for (const gui of localGuis) {
+            const wrongPattern = new RegExp(`\\b\\w+\\.[${gui.charAt(0).toUpperCase() + gui.slice(1)}]${gui.slice(1)}\\b`, 'g');
+            this.code = this.code.replace(wrongPattern, gui);
+        }
+        if (this.code.includes('LocalPlayer.Idled') && !this.code.includes('game.Players.LocalPlayer.Idled')) {
+            this.code = this.code.replace(/(?<!\.)\bLocalPlayer\.Idled/g, 'game.Players.LocalPlayer.Idled');
+        }
+        if (this.code.includes('LocalPlayer.CharacterAdded') && !this.code.includes('game.Players.LocalPlayer.CharacterAdded')) {
+            this.code = this.code.replace(/(?<!\.)\bLocalPlayer\.CharacterAdded/g, 'game.Players.LocalPlayer.CharacterAdded');
+        }
+        this.log.push("Trace artifacts fixed");
     }
 
     decodeAggressiveStrings() {
