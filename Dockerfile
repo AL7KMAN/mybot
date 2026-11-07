@@ -8,10 +8,16 @@ RUN apt-get update && apt-get install -y \
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
     && apt-get install -y nodejs
 
+# تثبيت .NET 9.0
 RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh \
     && bash dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
     && rm dotnet-install.sh
+
+# تثبيت .NET 6.0 (مطلوب لبناء unluau)
+RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install6.sh \
+    && bash dotnet-install6.sh --channel 6.0 --install-dir /usr/share/dotnet \
+    && rm dotnet-install6.sh
 
 WORKDIR /app
 
@@ -34,10 +40,11 @@ RUN mkdir -p tools && \
     git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec && \
     cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
 
+# بناء unluau باستخدام .NET 6.0
 RUN wget https://github.com/atrexus/unluau/archive/refs/heads/main.zip -O unluau.zip && \
     unzip unluau.zip && \
     mv unluau-main unluau-src && \
     cd unluau-src && \
-    dotnet publish src/Unluau.CLI/Unluau.CLI.csproj -c Release -f net9.0 -o /app/unluau-bin
+    dotnet publish src/Unluau.CLI/Unluau.CLI.csproj -c Release -f net6.0 -o /app/unluau-bin
 
 CMD ["npm", "start"]
