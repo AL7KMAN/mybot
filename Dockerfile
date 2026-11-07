@@ -13,6 +13,10 @@ RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
     && rm dotnet-install.sh
 
+RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install6.sh \
+    && bash dotnet-install6.sh --channel 6.0 --install-dir /usr/share/dotnet \
+    && rm dotnet-install6.sh
+
 WORKDIR /app
 
 COPY . .
@@ -34,8 +38,8 @@ RUN mkdir -p tools && \
     git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec && \
     cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
 
-RUN git clone https://github.com/Voraline/unluau-binaries.git /app/unluau-src && \
+RUN git clone https://github.com/atrexus/unluau.git /app/unluau-src && \
     cd /app/unluau-src && \
-    dotnet publish src/Unluau.CLI/Unluau.CLI.csproj -c Release -f net9.0 -o /app/unluau-bin
+    dotnet publish src/Unluau.CLI/Unluau.CLI.csproj -c Release -f net6.0 -o /app/unluau-bin
 
 CMD ["npm", "start"]
