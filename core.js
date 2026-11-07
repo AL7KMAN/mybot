@@ -1021,20 +1021,38 @@ class Deobfuscator {
 
     fixTraceArtifacts() {
         if (!this.code) return;
+        
+        // 1. إزالة عناوين الذاكرة
         this.code = this.code.replace(/function\s*\(([^)]*)\)\s*(x[0-9a-fA-F]{6,})/g, 'function($1)');
+        
+        // 2. إصلاح الـ Connect
         this.code = this.code.replace(/:connect\(/g, ':Connect(');
         this.code = this.code.replace(/:wait\(/g, ':Wait(');
+        
+        // 3. إصلاح الـ Parents
         const localGuis = [...this.code.matchAll(/local\s+(\w+)\s*=\s*Instance\.new\(["'](?:Frame|TextButton|TextLabel|ScreenGui)["']\)/g)].map(m => m[1]);
         for (const gui of localGuis) {
             const wrongPattern = new RegExp(`\\b\\w+\\.[${gui.charAt(0).toUpperCase() + gui.slice(1)}]${gui.slice(1)}\\b`, 'g');
             this.code = this.code.replace(wrongPattern, gui);
         }
+        
+        // 4. إصلاح LocalPlayer المقطوع
         if (this.code.includes('LocalPlayer.Idled') && !this.code.includes('game.Players.LocalPlayer.Idled')) {
             this.code = this.code.replace(/(?<!\.)\bLocalPlayer\.Idled/g, 'game.Players.LocalPlayer.Idled');
         }
         if (this.code.includes('LocalPlayer.CharacterAdded') && !this.code.includes('game.Players.LocalPlayer.CharacterAdded')) {
             this.code = this.code.replace(/(?<!\.)\bLocalPlayer\.CharacterAdded/g, 'game.Players.LocalPlayer.CharacterAdded');
         }
+
+        // 5. إصلاح اللوبات المكسورة (Smart Loop Fixer)
+        const brokenForRegex = /local\s+([a-zA-Z0-9_]+),\s*([a-zA-Z0-9_]+),\s*([a-zA-Z0-9_]+)\s*=\s*pairs\(([\s\S]*?)\)\s*local\s+([a-zA-Z0-9_]+),\s*([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\(([a-zA-Z0-9_]+),\s*([a-zA-Z0-9_]+)\)\s*if\s+([a-zA-Z0-9_]+)\s+then/g;
+        this.code = this.code.replace(brokenForRegex, (match, iter, tbl, nilv, expr, key, val, citer, ctbl, cnilv, ifkey) => {
+            if (iter === citer && tbl === ctbl && nilv === cnilv && key === ifkey) {
+                return `for ${key}, ${val} in pairs(${expr}) do`;
+            }
+            return match;
+        });
+
         this.log.push("Trace artifacts fixed");
     }
 
