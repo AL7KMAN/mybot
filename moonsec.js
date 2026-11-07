@@ -10,7 +10,7 @@ class MoonsecBridge {
             const unluacPath = "/root/.cargo/bin/unluac-cli";
 
             const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { 
-                timeout: 60000, 
+                timeout: 30000, 
                 killSignal: 'SIGKILL' 
             });
             
@@ -22,15 +22,12 @@ class MoonsecBridge {
             });
 
             proc.on("close", (code) => {
-                if (code === null) {
-                    return reject(new Error("Moonsec timed out."));
-                }
-                if (code !== 0 || !fs.existsSync(luacFile)) {
-                    return reject(new Error(`Moonsec failed: ${stderr.slice(-500)}`));
+                if (!fs.existsSync(luacFile)) {
+                    return reject(new Error(`Moonsec failed to extract bytecode.`));
                 }
 
                 const unluacProc = spawn(unluacPath, [luacFile], { 
-                    timeout: 60000, 
+                    timeout: 30000, 
                     killSignal: 'SIGKILL' 
                 });
                 
@@ -39,11 +36,12 @@ class MoonsecBridge {
                 unluacProc.stderr.on("data", (data) => { err += data.toString(); });
 
                 unluacProc.on("error", (jErr) => {
-                    reject(new Error(`Failed to start unluac-cli: ${jErr.message}`));
+                    const luacData = fs.readFileSync(luacFile);
+                    resolve("BYTECODE_HEX:" + luacData.toString("hex"));
                 });
 
                 unluacProc.on("close", (jCode) => {
-                    if (jCode === 0 && out.length > 20) {
+                    if (out.length > 50) {
                         resolve(out);
                     } else {
                         const luacData = fs.readFileSync(luacFile);
