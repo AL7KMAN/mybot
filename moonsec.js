@@ -1,3 +1,4 @@
+
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -28,11 +29,15 @@ class MoonsecBridge {
                     const fullPath = path.join(dir, deobfFile);
                     let text = fs.readFileSync(fullPath, "utf-8");
                     
-                    // مسح تعليقات Prometheus الزايدة
-                    text = text.replace(/^-- PHASE_BOUNDARY:INIT\s*/gm, '');
-                    
-                    // مسح أي أسطر فاضية ناتجة عن المسح
-                    text = text.replace(/\n\s*\n/g, '\n');
+                    text = text.replace(/-- PHASE_BOUNDARY:INIT\s*/g, '');
+                    text = text.replace(/-- \[\d+\]\s*/g, '');
+                    text = text.replace(/local function =/g, 'local _func =');
+                    text = text.replace(/local function\s*=/g, 'local _func =');
+                    text = text.replace(/local element = ;/g, 'local element = 0;');
+                    text = text.replace(/local element =  ;/g, 'local element = 0;');
+                    text = text.replace(/element = \(element \+ \s+\)/g, 'element = element + 1');
+                    text = text.replace(/% \)\w+/g, '% 1');
+                    text = text.replace(/\n{3,}/g, '\n\n');
                     
                     return resolve({ text: text });
                 }
