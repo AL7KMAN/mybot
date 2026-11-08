@@ -3,6 +3,7 @@ const { REST } = require("@discordjs/rest");
 const { Routes } = require("discord-api-types/v9");
 const fs = require("fs");
 const path = require("path");
+const fetch = require("node-fetch");
 
 const { Logger, Detector, VMAnalyzer, AntiTamperDetector, Deobfuscator, fetchCodeFromUrl, readAttachment } = require('./core.js');
 const { PythonBridge } = require('./tools.js');
@@ -51,7 +52,47 @@ async function resolveCode(interaction) {
 
 function extractUrls(text) {
     const urls = text.match(/https?:\/\/[^\s"'`]+/g) || [];
-    return [...new Set(urls)].filter(u => u.length > 10 && u.length < 250).slice(0, 20);
+    return [...new Set(urls)].filter(u => {
+        if (u.length < 10 || u.length > 250) return false;
+        if (u.includes("discord.gg") || u.includes("discord.com/invite")) return false;
+        if (u.includes("rbxassetid://")) return false;
+        if (/\.(png|jpe?g|gif|mp3|mp4|wav|ogg|ttf|otf|woff|svg|ico)$/i.test(u)) return false;
+        return true;
+    }).slice(0, 5);
+}
+
+async function autoFetchFiles(urls, maxTotal = 5) {
+    const files = [];
+    const fetchedUrls = new Set();
+    
+    for (const url of urls) {
+        if (files.length >= maxTotal) break;
+        if (fetchedUrls.has(url)) continue;
+        fetchedUrls.add(url);
+        
+        try {
+            const response = await fetch(url, { 
+                headers: { "User-Agent": "Mozilla/5.0" }, 
+                timeout: 15000 
+            });
+            if (!response.ok) continue;
+            const text = await response.text();
+            if (!text || text.length < 20) continue;
+            
+            const lc = text.trim().toLowerCase();
+            if (lc.startsWith("<!doctype html") || lc.startsWith("<html")) continue;
+            
+            let baseName = (url.split("?")[0].split("/").pop() || "file").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 60);
+            if (!baseName) baseName = "fetched";
+            if (!baseName.includes(".")) baseName += ".lua";
+            
+            files.push({ name: baseName, buffer: Buffer.from(text, "utf-8") });
+        } catch (e) {
+            Logger.log("WARN", `Auto-fetch failed for ${url}`, { error: e.message });
+        }
+    }
+    
+    return files;
 }
 
 async function handleWeAreDevs(interaction, code) {
@@ -79,18 +120,33 @@ async function handleWeAreDevs(interaction, code) {
                 finalCode = finalDeobf.code;
             }
         } catch (deobfErr) {
-            Logger.log("WARN", "Deobfuscator cleanup failed, using raw result", { error: deobfErr.message });
+            Logger.log("WARN", "Deobfuscator cleanup failed", { error: deobfErr.message });
         }
 
         const urls = extractUrls(finalCode);
+        const attachments = [new AttachmentBuilder(Buffer.from(finalCode, "utf-8"), { name: "deobfuscated.lua" })];
+        
         let extraMsg = "";
         if (urls.length > 0) {
-            extraMsg = "\n\n🔗 **Detected URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
+            extraMsg = "\n\n🔗 **Nested URLs found (raw, not deobfuscated):**\n" + urls.map(u => `- \`${u}\``).join("\n");
+            
+            await interaction.editReply({ 
+                content: `✅ **WeAreDevs Deobfuscated!**\n⏳ Fetching raw nested files...${extraMsg}` 
+            });
+            
+            const fetchedFiles = await autoFetchFiles(urls, 5);
+            for (const f of fetchedFiles) {
+                attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
+            }
+            
+            if (fetchedFiles.length > 0) {
+                extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} raw nested file(s).**`;
+            }
         }
 
         await interaction.editReply({
-            content: `✅ **WeAreDevs Deobfuscated!**\nDownload the file below.${extraMsg}`,
-            files: [new AttachmentBuilder(Buffer.from(finalCode, "utf-8"), { name: "deobfuscated.lua" })]
+            content: `✅ **WeAreDevs Deobfuscated!**\n📦 ${attachments.length} file(s) attached.${extraMsg}`,
+            files: attachments.slice(0, 10)
         });
     } catch (err) {
         await interaction.editReply({ content: `❌ **WeAreDevs Error:** \`${err.message.slice(0, 800)}\`` });
@@ -111,15 +167,30 @@ async function handleMoonsec(interaction, code) {
         const result = await MoonsecBridge.run(tempIn);
 
         if (result && result.text && result.text.length > 50) {
-            const urls = result.urls || [];
+            const urls = result.urls || extractUrls(result.text);
+            const attachments = [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })];
+            
             let extraMsg = "";
             if (urls.length > 0) {
-                extraMsg = "\n\n🔗 **Detected URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
+                extraMsg = "\n\n🔗 **Nested URLs found (raw, not deobfuscated):**\n" + urls.map(u => `- \`${u}\``).join("\n");
+                
+                await interaction.editReply({ 
+                    content: `✅ **Moonsec Deobfuscated!** (via \`${result.decompiler}\`)\n⏳ Fetching raw nested files...${extraMsg}` 
+                });
+                
+                const fetchedFiles = await autoFetchFiles(urls, 5);
+                for (const f of fetchedFiles) {
+                    attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
+                }
+                
+                if (fetchedFiles.length > 0) {
+                    extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} raw nested file(s).**`;
+                }
             }
 
             await interaction.editReply({
-                content: `✅ **Moonsec Deobfuscated!** (via \`${result.decompiler}\`)\nDownload the file below.${extraMsg}`,
-                files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })]
+                content: `✅ **Moonsec Deobfuscated!** (via \`${result.decompiler}\`)\n📦 ${attachments.length} file(s) attached.${extraMsg}`,
+                files: attachments.slice(0, 10)
             });
         } else if (result && result.isBytecode) {
             await interaction.editReply({
@@ -127,7 +198,7 @@ async function handleMoonsec(interaction, code) {
                 files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })]
             });
         } else if (result && result.error) {
-            await interaction.editReply({ content: `❌ **Moonsec Error:** \`${result.error}\`` });
+            await interaction.editReply({ content: `❌ **Moonsec Error:** \`${result.error.slice(0, 800)}\`` });
         } else {
             await interaction.editReply({ content: "❌ **Moonsec failed (unknown reason).**" });
         }
