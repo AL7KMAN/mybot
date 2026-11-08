@@ -118,7 +118,7 @@ class MoonsecBridge {
                 
                 proc.on("error", () => resolve(null));
                 proc.on("close", (code) => {
-                    if (code === 0 && out.length > 50 && !err.includes("Implicit return")) {
+                    if (code === 0 && out.length > 50) {
                         resolve(out);
                     } else {
                         resolve(null);
