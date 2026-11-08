@@ -43,8 +43,8 @@ RUN git clone https://github.com/x3zvawq/unluac-rs.git /app/unluac-rs && \
 
 RUN git clone https://github.com/HansWessels/unluac.git /app/unluac-src && \
     cd /app/unluac-src && \
-    sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' src/unluac/decompile/Validator.java && \
-    sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' src/unluac/decompile/*.java && \
+    FILE_TO_PATCH=$$(grep -rl "Implicit return must have zero values" src/) && \
+    sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' $$FILE_TO_PATCH && \
     ant && \
     cp unluac.jar /app/unluac.jar
 
