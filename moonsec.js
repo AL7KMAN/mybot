@@ -6,7 +6,14 @@ class MoonsecBridge {
     static async run(inputFile) {
         const dllResult = await MoonsecBridge.tryDll(inputFile);
         if (dllResult.success) {
-            return await MoonsecBridge.tryDecompress(dllResult.luacFile);
+            const decompileResult = await MoonsecBridge.tryDecompress(dllResult.luacFile);
+            if (!decompileResult.isBytecode) {
+                return decompileResult;
+            }
+            const dumpResult = await MoonsecBridge.tryDynamicDump(inputFile);
+            if (dumpResult.success) {
+                return MoonsecBridge.formatOutput(dumpResult.text, "Dynamic RAM Dumper (Stubs Hook)");
+            }
         }
         
         const polResult = await MoonsecBridge.tryPol(inputFile);
@@ -14,7 +21,7 @@ class MoonsecBridge {
             return MoonsecBridge.formatOutput(polResult.text, "Prometheus (pol.py)");
         }
         
-        return { error: `V2/V3 DLL failed (${dllResult.error}). pol.py also failed (${polResult.error}).` };
+        return { error: `V2/V3 Pipeline failed. unluac collapsed and dynamic trace hook failed.` };
     }
     
     static async tryDll(inputFile) {
@@ -42,6 +49,74 @@ class MoonsecBridge {
                     return resolve({ success: false, error: `DLL killed by timeout after 180s. ${stderr.slice(-200)}` });
                 }
                 resolve({ success: false, error: `DLL exit ${code}: ${stderr.slice(-300)}` });
+            });
+        });
+    }
+
+    static async tryDynamicDump(inputFile) {
+        return new Promise((resolve) => {
+            const dumpOutputFile = inputFile + ".dumped.lua";
+            
+            const injectorScript = `
+                local function makeStub()
+                    local stub = {}
+                    setmetatable(stub, {
+                        __index = function(_, key)
+                            return makeStub()
+                        end,
+                        __call = function()
+                            return makeStub()
+                        end
+                    })
+                    return stub
+                end
+
+                _G.game = makeStub()
+                _G.Instance = makeStub()
+                _G.typeof = function() return "Instance" end
+                _G.task = makeStub()
+                _G.script = makeStub()
+
+                local function saveDump(txt)
+                    if txt and #txt > 10 then
+                        local file = io.open("${dumpOutputFile.replace(/\\/g, '\\\\')}", "w")
+                        if file then
+                            file:write(txt)
+                            file:close()
+                        end
+                    end
+                end
+
+                local old_loadstring = loadstring
+                _G.loadstring = function(txt)
+                    saveDump(txt)
+                    return function() end
+                end
+
+                local old_load = load
+                _G.load = function(txt)
+                    saveDump(txt)
+                    return function() end
+                end
+
+                pcall(function()
+                    ${fs.readFileSync(inputFile, "utf-8")}
+                end)
+            `;
+            
+            const tempInjectorPath = inputFile + ".injector.lua";
+            fs.writeFileSync(tempInjectorPath, injectorScript, "utf-8");
+
+            const proc = spawn("lua", [tempInjectorPath], { timeout: 15000, killSignal: 'SIGKILL' });
+            
+            proc.on("close", () => {
+                try { fs.unlinkSync(tempInjectorPath); } catch(e) {}
+                if (fs.existsSync(dumpOutputFile) && fs.statSync(dumpOutputFile).size > 20) {
+                    const dumpedText = fs.readFileSync(dumpOutputFile, "utf-8");
+                    try { fs.unlinkSync(dumpOutputFile); } catch(e) {}
+                    return resolve({ success: true, text: dumpedText });
+                }
+                resolve({ success: false, error: "Dynamic trace timed out or Roblox dependency caused early halt." });
             });
         });
     }
