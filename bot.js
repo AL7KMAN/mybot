@@ -70,14 +70,16 @@ async function handleVMExecution(interaction, code, detectionName) {
             if (result.urls && result.urls.length > 0) {
                 extraMsg = "\n\n🔗 **Detected URLs:**\n" + result.urls.map(u => `- \`${u}\``).join("\n");
             }
-
+            
+            const decompilerName = result.decompiler || "unknown";
+            
             await interaction.editReply({
-                content: `✅ **Deobfuscation Complete!** (Download the file to view the code)${extraMsg}`,
+                content: `✅ **Deobfuscation Complete!** (via \`${decompilerName}\`)\nDownload the file below to view the code.${extraMsg}`,
                 files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })]
             }).catch(() => {});
         } else if (result && result.isBytecode) {
             await interaction.editReply({
-                content: "⚠️ **Decompiler failed.** Here is the extracted Bytecode (.luac).",
+                content: "⚠️ **Both decompilers failed.**\nHere is the extracted bytecode. You can manually upload it to a site like `luadec.dev` or `lunaux-decompiler.dev`.",
                 files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })]
             }).catch(() => {});
         } else if (result && result.error) {
