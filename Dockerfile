@@ -2,7 +2,7 @@ FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y \
     curl git python3.12 python3-pip python3.12-venv \
-    wget default-jdk lua5.1 unzip build-essential \
+    wget default-jdk lua5.1 unzip \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
@@ -12,9 +12,6 @@ RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh \
     && bash dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
     && rm dotnet-install.sh
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 
@@ -36,9 +33,5 @@ RUN mkdir -p tools && \
     chmod +x /app/tools/wearedevs/lua_linux/lua5.1 && \
     git clone https://github.com/tupsutumppu/MoonsecDeobfuscator.git tools/moonsec && \
     cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
-
-RUN git clone https://github.com/x3zvawq/unluac-rs.git /app/unluac-rs && \
-    cd /app/unluac-rs && \
-    cargo install --path packages/unluac-cli
 
 CMD ["npm", "start"]
