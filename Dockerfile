@@ -1,12 +1,18 @@
 FROM ubuntu:24.04
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y \
     curl git python3.12 python3-pip python3.12-venv \
-    wget default-jdk lua5.1 unzip build-essential ant \
+    wget default-jdk lua5.1 luarocks unzip build-essential ant \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
-    && apt-get install -y nodejs
+RUN luarocks install bit32 || true
+
+RUN mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://nodesource.com | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://nodesource.com nodistro main" | tee /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y nodejs
 
 RUN wget https://dot.net/v1/dotnet-install.sh -O dotnet-install.sh \
     && bash dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet \
@@ -22,11 +28,11 @@ COPY . .
 
 RUN npm install
 
-RUN git clone https://github.com/prostone4/Prometheus-Deobfuscator.git /app/prometheus-deobf
-RUN cd /app/prometheus-deobf && npm install
+RUN git clone https://github.com/prostone4/Prometheus-Deobfuscator.git /app/prometheus-deobf \
+    && cd /app/prometheus-deobf && npm install
 
-RUN python3.12 -m venv /opt/venv
-RUN /opt/venv/bin/pip install -r requirements.txt
+RUN python3.12 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt || true
 
 RUN mkdir -p tools && \
     git clone https://github.com/0x251/Prometheus-Deobfuscator.git tools/prometheus && \
@@ -43,8 +49,8 @@ RUN git clone https://github.com/x3zvawq/unluac-rs.git /app/unluac-rs && \
 
 RUN git clone https://github.com/HansWessels/unluac.git /app/unluac-src && \
     cd /app/unluac-src && \
-    FILE_TO_PATCH=$$(grep -rl "Implicit return must have zero values" src/) && \
-    sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' $$FILE_TO_PATCH && \
+    FILE_TO_PATCH=$(grep -rl "Implicit return must have zero values" src/) && \
+    sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' $FILE_TO_PATCH && \
     ant && \
     cp unluac.jar /app/unluac.jar
 
