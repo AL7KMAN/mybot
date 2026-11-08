@@ -66,20 +66,14 @@ async function handleVMExecution(interaction, code, detectionName) {
         }
         
         if (result && result.text) {
-            let finalCode = result.text;
-            
-            const urlRegex = /https?:\/\/[^\s"'`]+/g;
-            const urls = finalCode.match(urlRegex) || [];
-            const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
-            
             let extraMsg = "";
-            if (uniqueUrls.length > 0) {
-                extraMsg = "\n\n🔗 **Detected URLs:**\n" + uniqueUrls.map(u => `- \`${u}\``).join("\n");
+            if (result.urls && result.urls.length > 0) {
+                extraMsg = "\n\n🔗 **Detected URLs:**\n" + result.urls.map(u => `- \`${u}\``).join("\n");
             }
 
             await interaction.editReply({
-                content: `✅ **Deobfuscation Complete!** (Download the file to view the code)${extraMsg}`,
-                files: [new AttachmentBuilder(Buffer.from(finalCode, "utf-8"), { name: "deobfuscated.lua" })]
+                content: `✅ **Deobfuscation Complete!** (Download the file)${extraMsg}`,
+                files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })]
             }).catch(() => {});
         } else if (result && result.isBytecode) {
             await interaction.editReply({
@@ -109,8 +103,7 @@ async function handleStandardDeobfuscation(interaction, code, detectionName) {
             const finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
             const finalName = pipelineResult.isClean ? "deobfuscated_clean.lua" : "extracted_partial.lua";
             
-            const urlRegex = /https?:\/\/[^\s"'`]+/g;
-            const urls = pipelineResult.code.match(urlRegex) || [];
+            const urls = pipelineResult.code.match(/https?:\/\/[^\s"'`]+/g) || [];
             const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
             
             let extraMsg = "";
