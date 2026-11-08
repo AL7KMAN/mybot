@@ -4,12 +4,26 @@ const fs = require("fs");
 
 class MoonsecBridge {
     static async run(inputFile) {
+        const dllResult = await MoonsecBridge.tryDll(inputFile);
+        if (dllResult.success) {
+            return await MoonsecBridge.tryDecompress(dllResult.luacFile);
+        }
+        
+        const polResult = await MoonsecBridge.tryPol(inputFile);
+        if (polResult.success) {
+            return MoonsecBridge.formatOutput(polResult.text, "Prometheus (pol.py)");
+        }
+        
+        return { error: `V2/V3 DLL failed (${dllResult.error}). pol.py also failed (${polResult.error}).` };
+    }
+    
+    static async tryDll(inputFile) {
         return new Promise((resolve) => {
             const luacFile = inputFile + ".luac";
             const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
 
             const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { 
-                timeout: 60000, 
+                timeout: 180000, 
                 killSignal: 'SIGKILL' 
             });
             
@@ -17,14 +31,48 @@ class MoonsecBridge {
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
             proc.on("error", (err) => {
-                resolve({ error: `Moonsec DLL spawn failed: ${err.message}` });
+                resolve({ success: false, error: `spawn failed: ${err.message}` });
             });
 
-            proc.on("close", (code) => {
-                if (code !== 0 || !fs.existsSync(luacFile) || fs.statSync(luacFile).size < 10) {
-                    return resolve({ error: `Moonsec DLL exit ${code}: ${stderr.slice(-300)}` });
+            proc.on("close", (code, signal) => {
+                if (fs.existsSync(luacFile) && fs.statSync(luacFile).size > 10) {
+                    return resolve({ success: true, luacFile });
                 }
-                MoonsecBridge.tryDecompress(luacFile).then(resolve);
+                if (signal === "SIGKILL") {
+                    return resolve({ success: false, error: `DLL killed by timeout after 180s. ${stderr.slice(-200)}` });
+                }
+                resolve({ success: false, error: `DLL exit ${code}: ${stderr.slice(-300)}` });
+            });
+        });
+    }
+    
+    static async tryPol(inputFile) {
+        return new Promise((resolve) => {
+            const polPath = path.join(__dirname, "tools/prometheus/pol.py");
+            if (!fs.existsSync(polPath)) return resolve({ success: false, error: "pol.py not found" });
+            
+            const proc = spawn("/opt/venv/bin/python3", [polPath, inputFile], { 
+                timeout: 180000, 
+                killSignal: 'SIGKILL' 
+            });
+            
+            let stdout = "", stderr = "";
+            proc.stdout.on("data", (d) => { stdout += d.toString(); });
+            proc.stderr.on("data", (d) => { stderr += d.toString(); });
+            
+            proc.on("close", (code) => {
+                if (code === 0 && stdout.length > 100) {
+                    return resolve({ success: true, text: stdout });
+                }
+                const dir = path.dirname(inputFile);
+                try {
+                    const files = fs.readdirSync(dir);
+                    const deobfFile = files.find(f => f.endsWith(".lua") && f !== "input.lua");
+                    if (deobfFile) {
+                        return resolve({ success: true, text: fs.readFileSync(path.join(dir, deobfFile), "utf-8") });
+                    }
+                } catch (e) {}
+                resolve({ success: false, error: `exit ${code}: ${stderr.slice(-300)}` });
             });
         });
     }
@@ -64,8 +112,7 @@ class MoonsecBridge {
         return new Promise((resolve) => {
             try {
                 const proc = spawn(cmd, args, { timeout: timeoutMs, killSignal: 'SIGKILL' });
-                let out = "";
-                let err = "";
+                let out = "", err = "";
                 proc.stdout.on("data", (data) => { out += data.toString(); });
                 proc.stderr.on("data", (data) => { err += data.toString(); });
                 
