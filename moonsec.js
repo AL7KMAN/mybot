@@ -1,3 +1,4 @@
+
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -8,7 +9,7 @@ class MoonsecBridge {
             const polPath = path.join(__dirname, "tools/prometheus/pol.py");
 
             const proc = spawn("/opt/venv/bin/python3", [polPath, inputFile], { 
-                timeout: 120000, 
+                timeout: 180000, 
                 killSignal: 'SIGKILL' 
             });
             
@@ -25,7 +26,7 @@ class MoonsecBridge {
                 let deobfFile = null;
                 try {
                     const files = fs.readdirSync(dir);
-                    deobfFile = files.find(f => f.includes(".deobf") || f.includes("deobfuscated") || f.includes("output"));
+                    deobfFile = files.find(f => f.endsWith(".lua") && f !== "input.lua");
                 } catch (e) {}
 
                 if (deobfFile) {
@@ -34,14 +35,14 @@ class MoonsecBridge {
                     return resolve({ text: text });
                 }
 
-                if (stdout.length > 50) {
+                if (stdout.length > 50 && !stdout.includes("[POL]")) {
                     return resolve({ text: stdout });
                 }
 
-                resolve({ error: `Prometheus failed to deobfuscate. Code: ${code}. Error: ${stderr.slice(-500)}` });
+                resolve({ error: `Prometheus failed to generate output file.` });
             });
         });
     }
 }
 
-module.exports = { MoonsecBridge };
+module.exports = { MoonsecBridge };ض
