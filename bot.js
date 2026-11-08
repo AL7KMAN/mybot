@@ -49,46 +49,90 @@ async function resolveCode(interaction) {
     throw new Error("You must provide code, a URL, or a file.");
 }
 
-async function handleVMExecution(interaction, code, detectionName) {
-    await interaction.editReply({ content: `⏳ **${detectionName} Detected.** Running Native Engine...` });
-    
-    const tempDir = path.join(__dirname, `vm_${Date.now()}`);
+function extractUrls(text) {
+    const urls = text.match(/https?:\/\/[^\s"'`]+/g) || [];
+    return [...new Set(urls)].filter(u => u.length > 10 && u.length < 250).slice(0, 20);
+}
+
+async function handleWeAreDevs(interaction, code) {
+    await interaction.editReply({ content: "⏳ **WeAreDevs Detected.** Running Prometheus (pdeobf.js)..." });
+
+    const tempDir = path.join(__dirname, `wd_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
     const tempIn = path.join(tempDir, "input.lua");
     fs.writeFileSync(tempIn, code);
 
     try {
-        let result = "";
-        if (detectionName.includes("Moonsec")) {
-            result = await MoonsecBridge.run(tempIn);
-        } else {
-            result = await PythonBridge.run("wearedevs", tempIn);
+        const rawResult = await PythonBridge.run("wearedevs", tempIn);
+
+        if (typeof rawResult !== "string" || rawResult.length < 50) {
+            return interaction.editReply({
+                content: `❌ **WeAreDevs failed.** PythonBridge returned: \`${String(rawResult).slice(0, 400)}\``
+            });
         }
-        
-        if (result && result.text) {
-            let extraMsg = "";
-            if (result.urls && result.urls.length > 0) {
-                extraMsg = "\n\n🔗 **Detected URLs:**\n" + result.urls.map(u => `- \`${u}\``).join("\n");
+
+        let finalCode = rawResult;
+        try {
+            const finalDeobf = new Deobfuscator(rawResult, { beautify: true });
+            await finalDeobf.run();
+            if (finalDeobf.code && finalDeobf.code.length > 50) {
+                finalCode = finalDeobf.code;
             }
-            
-            const decompilerName = result.decompiler || "unknown";
-            
+        } catch (deobfErr) {
+            Logger.log("WARN", "Deobfuscator cleanup failed, using raw result", { error: deobfErr.message });
+        }
+
+        const urls = extractUrls(finalCode);
+        let extraMsg = "";
+        if (urls.length > 0) {
+            extraMsg = "\n\n🔗 **Detected URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
+        }
+
+        await interaction.editReply({
+            content: `✅ **WeAreDevs Deobfuscated!**\nDownload the file below.${extraMsg}`,
+            files: [new AttachmentBuilder(Buffer.from(finalCode, "utf-8"), { name: "deobfuscated.lua" })]
+        });
+    } catch (err) {
+        await interaction.editReply({ content: `❌ **WeAreDevs Error:** \`${err.message.slice(0, 800)}\`` });
+    } finally {
+        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+    }
+}
+
+async function handleMoonsec(interaction, code) {
+    await interaction.editReply({ content: "⏳ **Moonsec Detected.** Running DLL + decompilers..." });
+
+    const tempDir = path.join(__dirname, `ms_${Date.now()}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempIn = path.join(tempDir, "input.lua");
+    fs.writeFileSync(tempIn, code);
+
+    try {
+        const result = await MoonsecBridge.run(tempIn);
+
+        if (result && result.text && result.text.length > 50) {
+            const urls = result.urls || [];
+            let extraMsg = "";
+            if (urls.length > 0) {
+                extraMsg = "\n\n🔗 **Detected URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
+            }
+
             await interaction.editReply({
-                content: `✅ **Deobfuscation Complete!** (via \`${decompilerName}\`)\nDownload the file below to view the code.${extraMsg}`,
+                content: `✅ **Moonsec Deobfuscated!** (via \`${result.decompiler}\`)\nDownload the file below.${extraMsg}`,
                 files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })]
-            }).catch(() => {});
+            });
         } else if (result && result.isBytecode) {
             await interaction.editReply({
-                content: "⚠️ **Both decompilers failed.**\nHere is the extracted bytecode. You can manually upload it to a site like `luadec.dev` or `lunaux-decompiler.dev`.",
+                content: "⚠️ **Both decompilers failed.** Bytecode extracted. Upload it to `luadec.dev` manually.",
                 files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })]
-            }).catch(() => {});
+            });
         } else if (result && result.error) {
-            await interaction.editReply({ content: `❌ **Error:** ${result.error}` }).catch(() => {});
+            await interaction.editReply({ content: `❌ **Moonsec Error:** \`${result.error}\`` });
         } else {
-            await interaction.editReply({ content: "❌ **Failed to extract.** Diagnostics exhausted." }).catch(() => {});
+            await interaction.editReply({ content: "❌ **Moonsec failed (unknown reason).**" });
         }
     } catch (err) {
-        await interaction.editReply({ content: `❌ **Error:** \`${err.message}\`` }).catch(() => {});
+        await interaction.editReply({ content: `❌ **Moonsec Error:** \`${err.message.slice(0, 800)}\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -104,26 +148,24 @@ async function handleStandardDeobfuscation(interaction, code, detectionName) {
         if (pipelineResult.code) {
             const finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
             const finalName = pipelineResult.isClean ? "deobfuscated_clean.lua" : "extracted_partial.lua";
-            
-            const urls = pipelineResult.code.match(/https?:\/\/[^\s"'`]+/g) || [];
-            const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
-            
+
+            const urls = extractUrls(pipelineResult.code);
             let extraMsg = "";
-            if (uniqueUrls.length > 0) {
-                extraMsg = "\n\n🔗 **Detected URLs:**\n" + uniqueUrls.map(u => `- \`${u}\``).join("\n");
+            if (urls.length > 0) {
+                extraMsg = "\n\n🔗 **Detected URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
             }
 
             const toolsStr = pipelineResult.tools.join(" ➔ ");
             const statusMsg = pipelineResult.isClean
                 ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\`${extraMsg}`
                 : `⚠️ **Partial Extraction.**\n🧠 Pipeline: \`${toolsStr}\`${extraMsg}`;
-                
-            await interaction.editReply({ content: statusMsg, files: [new AttachmentBuilder(finalBuffer, { name: finalName })] }).catch(() => {});
+
+            await interaction.editReply({ content: statusMsg, files: [new AttachmentBuilder(finalBuffer, { name: finalName })] });
         } else {
-            await interaction.editReply({ content: "❌ **Pipeline failed.** All tools exhausted." }).catch(() => {});
+            await interaction.editReply({ content: "❌ **Pipeline failed.** All tools exhausted." });
         }
     } catch (err) {
-        await interaction.editReply({ content: `❌ **Pipeline crashed:** \`${err.message}\`` }).catch(() => {});
+        await interaction.editReply({ content: `❌ **Pipeline crashed:** \`${err.message}\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -169,19 +211,21 @@ client.on("interactionCreate", async (interaction) => {
             if (code.length > 500000) throw new Error("Script exceeds 500KB limit.");
 
             const quickDetect = new Detector(code).detect();
-            const vmInfo = VMAnalyzer.analyze(code);
 
-            const isTargetVM = quickDetect.name.includes("WeAreDevs") || 
-                               quickDetect.name.includes("Moonsec") || 
-                               vmInfo.isVM || 
-                               code.includes("wearedevs.net/obfuscator") || 
-                               code.includes("MoonSec");
-
-            if (isTargetVM) {
-                await handleVMExecution(interaction, code, quickDetect.name);
-            } else {
-                await handleStandardDeobfuscation(interaction, code, quickDetect.name);
+            if (quickDetect.name.includes("Moonsec") || code.includes("MoonSec")) {
+                return await handleMoonsec(interaction, code);
             }
+
+            if (quickDetect.name.includes("WeAreDevs") || code.includes("wearedevs.net/obfuscator")) {
+                return await handleWeAreDevs(interaction, code);
+            }
+
+            const vmInfo = VMAnalyzer.analyze(code);
+            if (vmInfo.isVM) {
+                return await handleWeAreDevs(interaction, code);
+            }
+
+            await handleStandardDeobfuscation(interaction, code, quickDetect.name);
         }
     } catch (error) {
         await interaction.editReply({ content: `❌ **Error:** ${error.message.slice(0, 1500)}` }).catch(() => {});
