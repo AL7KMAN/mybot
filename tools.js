@@ -20,46 +20,41 @@ class PythonBridge {
                 const proc = spawn(cmd, args, { timeout: 120000 });
 
                 let stderr = "";
+                let stdout = "";
+                proc.stdout.on("data", (data) => { stdout += data.toString(); });
                 proc.stderr.on("data", (data) => { stderr += data.toString(); });
+
+                proc.on("error", (err) => {
+                    reject(new Error(`WeAreDevs spawn failed: ${err.message}`));
+                });
 
                 proc.on("close", (code) => {
                     if (fs.existsSync(deobfPath) && fs.statSync(deobfPath).size > 50) {
                         return resolve(fs.readFileSync(deobfPath, "utf-8"));
                     }
                     if (code !== 0) {
-                        return reject(new Error(`Prometheus Node.js Error (${code}): ${stderr.slice(-1500)}`));
+                        return reject(new Error(`pdeobf exit ${code}. STDERR: ${stderr.slice(-400)} | STDOUT: ${stdout.slice(-400)}`));
                     }
-                    reject(new Error("Prometheus Node.js finished but no output file was created."));
+                    reject(new Error(`pdeobf produced no output file. STDOUT: ${stdout.slice(-400)}`));
                 });
                 return;
             }
 
-            if (tool === "moonsec") {
-                return reject(new Error("Moonsec is now handled by MoonsecBridge."));
+            if (tool === "prometheus") {
+                const cmd = "/opt/venv/bin/python3";
+                const args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
+                const proc = spawn(cmd, args, { timeout: 120000 });
+                let stdout = "", stderr = "";
+                proc.stdout.on("data", (d) => { stdout += d.toString(); });
+                proc.stderr.on("data", (d) => { stderr += d.toString(); });
+                proc.on("close", (code) => {
+                    if (code === 0) resolve(this.stripAnsi(stdout) || "Success");
+                    else reject(new Error(`Prometheus exit ${code}: ${this.stripAnsi(stderr).slice(-1000)}`));
+                });
+                return;
             }
 
-            let cmd, args, options;
-            if (tool === "prometheus") {
-                cmd = "/opt/venv/bin/python3";
-                args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
-                options = { timeout: 60000 };
-            } else {
-                return reject(new Error(`Unknown tool: ${tool}`));
-            }
-            
-            const proc = spawn(cmd, args, options);
-            let stdout = "";
-            let stderr = "";
-            proc.stdout.on("data", (data) => { stdout += data.toString(); });
-            proc.stderr.on("data", (data) => { stderr += data.toString(); });
-            
-            proc.on("close", (code) => {
-                if (code === 0) {
-                    resolve(this.stripAnsi(stdout) || "Success");
-                } else {
-                    reject(new Error(`Tool Error (${code}): ${this.stripAnsi(stderr).slice(-1500)}`));
-                }
-            });
+            reject(new Error(`Unknown tool: ${tool}`));
         });
     }
 
@@ -71,7 +66,7 @@ class PythonBridge {
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             proc.on("close", (code) => {
                 if (code === 0) resolve(stdout);
-                else reject(new Error(`unluac Error: ${stderr}`));
+                else reject(new Error(`unluac Error: ${stderr.slice(-500)}`));
             });
         });
     }
