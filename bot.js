@@ -72,7 +72,7 @@ async function handleVMExecution(interaction, code, detectionName) {
             }
 
             await interaction.editReply({
-                content: `✅ **Deobfuscation Complete!** (Download the file)${extraMsg}`,
+                content: `✅ **Deobfuscation Complete!** (Download the file to view the code)${extraMsg}`,
                 files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })]
             }).catch(() => {});
         } else if (result && result.isBytecode) {
