@@ -17,14 +17,13 @@ class MoonsecBridge {
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
             proc.on("error", (err) => {
-                resolve({ error: `Moonsec DLL failed to start: ${err.message}` });
+                resolve({ error: `Moonsec DLL spawn failed: ${err.message}` });
             });
 
             proc.on("close", (code) => {
                 if (code !== 0 || !fs.existsSync(luacFile) || fs.statSync(luacFile).size < 10) {
-                    return resolve({ error: `Moonsec DLL failed to extract bytecode: ${stderr.slice(-300)}` });
+                    return resolve({ error: `Moonsec DLL exit ${code}: ${stderr.slice(-300)}` });
                 }
-                
                 MoonsecBridge.tryDecompress(luacFile).then(resolve);
             });
         });
@@ -50,7 +49,6 @@ class MoonsecBridge {
     
     static formatOutput(code, source) {
         let finalCode = code;
-        
         finalCode = finalCode.replace(/-- PHASE_BOUNDARY:\w+\s*/g, '');
         finalCode = finalCode.replace(/-- \[\d+\]\s*/g, '');
         finalCode = finalCode.replace(/\[POL\] - /g, '-- ');
