@@ -1,4 +1,3 @@
-
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -6,43 +5,59 @@ const fs = require("fs");
 class MoonsecBridge {
     static async run(inputFile) {
         return new Promise((resolve) => {
-            const polPath = path.join(__dirname, "tools/prometheus/pol.py");
+            const luacFile = inputFile + ".luac";
+            const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
+            const unluacPath = "/root/.cargo/bin/unluac-cli";
 
-            const proc = spawn("/opt/venv/bin/python3", [polPath, inputFile], { 
-                timeout: 180000, 
+            const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { 
+                timeout: 60000, 
                 killSignal: 'SIGKILL' 
             });
             
+            let stderr = "";
+            proc.stderr.on("data", (data) => { stderr += data.toString(); });
+            
             proc.on("error", (err) => {
-                resolve({ error: `Failed to start Prometheus: ${err.message}` });
+                resolve({ error: `Failed to start Moonsec DLL: ${err.message}` });
             });
 
             proc.on("close", (code) => {
-                const dir = path.dirname(inputFile);
-                let deobfFile = null;
-                try {
-                    const files = fs.readdirSync(dir);
-                    deobfFile = files.find(f => f.endsWith(".lua") && f !== "input.lua");
-                } catch (e) {}
-
-                if (deobfFile) {
-                    const fullPath = path.join(dir, deobfFile);
-                    let text = fs.readFileSync(fullPath, "utf-8");
-                    
-                    text = text.replace(/-- PHASE_BOUNDARY:INIT\s*/g, '');
-                    text = text.replace(/-- \[\d+\]\s*/g, '');
-                    text = text.replace(/local function =/g, 'local _func =');
-                    text = text.replace(/local function\s*=/g, 'local _func =');
-                    text = text.replace(/local element = ;/g, 'local element = 0;');
-                    text = text.replace(/local element =  ;/g, 'local element = 0;');
-                    text = text.replace(/element = \(element \+ \s+\)/g, 'element = element + 1');
-                    text = text.replace(/% \)\w+/g, '% 1');
-                    text = text.replace(/\n{3,}/g, '\n\n');
-                    
-                    return resolve({ text: text });
+                if (code !== 0 || !fs.existsSync(luacFile)) {
+                    return resolve({ error: `Moonsec DLL failed: ${stderr.slice(-500)}` });
                 }
 
-                resolve({ error: `Prometheus failed to generate output file.` });
+                const unluacProc = spawn(unluacPath, [luacFile], { 
+                    timeout: 60000, 
+                    killSignal: 'SIGKILL' 
+                });
+                
+                let out = "", err = "";
+                unluacProc.stdout.on("data", (data) => { out += data.toString(); });
+                unluacProc.stderr.on("data", (data) => { err += data.toString(); });
+
+                unluacProc.on("error", (jErr) => {
+                    const luacData = fs.readFileSync(luacFile);
+                    resolve({ isBytecode: true, buffer: luacData });
+                });
+
+                unluacProc.on("close", (jCode) => {
+                    if (jCode === 0 && out.length > 50) {
+                        let finalCode = out;
+                        finalCode = finalCode.replace(/-- PHASE_BOUNDARY:INIT\s*/g, '');
+                        finalCode = finalCode.replace(/-- \[\d+\]\s*/g, '');
+                        finalCode = finalCode.replace(/local function =/g, 'local _func =');
+                        finalCode = finalCode.replace(/local element = ;/g, 'local element = 0;');
+                        finalCode = finalCode.replace(/\n{3,}/g, '\n\n');
+
+                        const urls = finalCode.match(/https?:\/\/[^\s"'`]+/g) || [];
+                        const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
+
+                        resolve({ text: finalCode, urls: uniqueUrls });
+                    } else {
+                        const luacData = fs.readFileSync(luacFile);
+                        resolve({ isBytecode: true, buffer: luacData });
+                    }
+                });
             });
         });
     }
