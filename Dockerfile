@@ -2,7 +2,7 @@ FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y \
     curl git python3.12 python3-pip python3.12-venv \
-    wget default-jdk lua5.1 unzip build-essential \
+    wget default-jdk lua5.1 unzip build-essential ant \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
@@ -41,6 +41,11 @@ RUN git clone https://github.com/x3zvawq/unluac-rs.git /app/unluac-rs && \
     cd /app/unluac-rs && \
     cargo install --path packages/unluac-cli
 
-RUN wget -O /app/unluac.jar https://sourceforge.net/projects/unluac/files/latest/download
+RUN git clone https://github.com/HansWessels/unluac.git /app/unluac-src && \
+    cd /app/unluac-src && \
+    sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' src/unluac/decompile/Validator.java && \
+    sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' src/unluac/decompile/*.java && \
+    ant && \
+    cp unluac.jar /app/unluac.jar
 
 CMD ["npm", "start"]
