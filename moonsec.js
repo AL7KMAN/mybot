@@ -1,4 +1,3 @@
-
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
@@ -23,23 +22,34 @@ class MoonsecBridge {
 
             proc.on("close", (code) => {
                 const dir = path.dirname(inputFile);
-                let deobfFile = null;
+                let targetFile = null;
+                
                 try {
                     const files = fs.readdirSync(dir);
-                    deobfFile = files.find(f => f.endsWith(".lua") && f !== "input.lua");
+                    const possibleFiles = ["output.lua", "deobfuscated.lua", "output_cleaned.lua", "pol_output.lua"];
+                    for (const f of possibleFiles) {
+                        if (files.includes(f)) {
+                            targetFile = path.join(dir, f);
+                            break;
+                        }
+                    }
+                    
+                    if (!targetFile) {
+                        const anyLua = files.find(f => f.endsWith(".lua") && f !== "input.lua");
+                        if (anyLua) targetFile = path.join(dir, anyLua);
+                    }
                 } catch (e) {}
 
-                if (deobfFile) {
-                    const fullPath = path.join(dir, deobfFile);
-                    const text = fs.readFileSync(fullPath, "utf-8");
+                if (targetFile && fs.existsSync(targetFile)) {
+                    const text = fs.readFileSync(targetFile, "utf-8");
                     return resolve({ text: text });
                 }
 
-                if (stdout.length > 50 && !stdout.includes("[POL]")) {
+                if (stdout.length > 50) {
                     return resolve({ text: stdout });
                 }
 
-                resolve({ error: `Prometheus failed to generate output file.` });
+                resolve({ error: `Prometheus finished but no output file was found.` });
             });
         });
     }
