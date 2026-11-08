@@ -65,23 +65,29 @@ async function handleVMExecution(interaction, code, detectionName) {
             result = await PythonBridge.run("wearedevs", tempIn);
         }
         
-        if (result && result.isBytecode) {
+        if (result && result.text) {
+            // تمرير الكود على المنظف عشان يشيل التعليقات الزايدة ويرتب الكود
+            const finalDeobf = new Deobfuscator(result.text, { beautify: true });
+            await finalDeobf.run();
+            
+            let previewContent = finalDeobf.code.length > 1800 ? finalDeobf.code.slice(0, 1800) + "\n... (Truncated)" : finalDeobf.code;
             await interaction.editReply({
-                content: "⚠️ **Decompiler failed (Advanced VM Protection).**\nHere is the extracted Bytecode (.luac). Upload it to an online decompiler.",
-                files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })]
+                content: `✅ **Extracted Code (Cleaned):**\n\`\`\`lua\n${previewContent}\n\`\`\``,
+                files: [new AttachmentBuilder(Buffer.from(finalDeobf.code, "utf-8"), { name: "deobfuscated.lua" })]
             }).catch(() => {});
-        } else if (result && result.text) {
+        } else if (result && result.isBytecode) {
             await interaction.editReply({
-                content: `✅ **Extracted clean payload!**`,
-                files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })]
+                content: "⚠️ **Decompiler failed.** Here is the extracted Bytecode (.luac).",
+                files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })]
             }).catch(() => {});
         } else if (result && result.error) {
             await interaction.editReply({ content: `❌ **Error:** ${result.error}` }).catch(() => {});
         } else if (typeof result === 'string' && result.length > 50) {
             const finalDeobf = new Deobfuscator(result, { beautify: true });
             await finalDeobf.run();
+            let previewContent = finalDeobf.code.length > 1800 ? finalDeobf.code.slice(0, 1800) + "\n... (Truncated)" : finalDeobf.code;
             await interaction.editReply({
-                content: `✅ **Extracted clean payload!**`,
+                content: `✅ **Extracted Code (Cleaned):**\n\`\`\`lua\n${previewContent}\n\`\`\``,
                 files: [new AttachmentBuilder(Buffer.from(finalDeobf.code, "utf-8"), { name: "deobfuscated.lua" })]
             }).catch(() => {});
         } else {
