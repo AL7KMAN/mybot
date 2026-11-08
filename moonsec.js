@@ -45,4 +45,4 @@ class MoonsecBridge {
     }
 }
 
-module.exports = { MoonsecBridge };ض
+module.exports = { MoonsecBridge };
