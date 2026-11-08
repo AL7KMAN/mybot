@@ -68,15 +68,17 @@ async function handleVMExecution(interaction, code, detectionName) {
         if (result && result.text) {
             let finalCode = result.text;
             
-            // مسح إضافي لأي زبالة ممكن تكون علقت
-            finalCode = finalCode.replace(/-- PHASE_BOUNDARY:INIT\s*/g, '');
-            finalCode = finalCode.replace(/\[POL\] - /g, '-- ');
-            finalCode = finalCode.replace(/\n{3,}/g, '\n\n');
+            const urlRegex = /https?:\/\/[^\s"'`]+/g;
+            const urls = finalCode.match(urlRegex) || [];
+            const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
             
-            let previewContent = finalCode.length > 1800 ? finalCode.slice(0, 1800) + "\n... (Truncated)" : finalCode;
-            
+            let extraMsg = "";
+            if (uniqueUrls.length > 0) {
+                extraMsg = "\n\n🔗 **Detected URLs:**\n" + uniqueUrls.map(u => `- \`${u}\``).join("\n");
+            }
+
             await interaction.editReply({
-                content: `✅ **Extracted Code:**\n\`\`\`lua\n${previewContent}\n\`\`\``,
+                content: `✅ **Deobfuscation Complete!** (Download the file to view the code)${extraMsg}`,
                 files: [new AttachmentBuilder(Buffer.from(finalCode, "utf-8"), { name: "deobfuscated.lua" })]
             }).catch(() => {});
         } else if (result && result.isBytecode) {
@@ -106,10 +108,20 @@ async function handleStandardDeobfuscation(interaction, code, detectionName) {
         if (pipelineResult.code) {
             const finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
             const finalName = pipelineResult.isClean ? "deobfuscated_clean.lua" : "extracted_partial.lua";
+            
+            const urlRegex = /https?:\/\/[^\s"'`]+/g;
+            const urls = pipelineResult.code.match(urlRegex) || [];
+            const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
+            
+            let extraMsg = "";
+            if (uniqueUrls.length > 0) {
+                extraMsg = "\n\n🔗 **Detected URLs:**\n" + uniqueUrls.map(u => `- \`${u}\``).join("\n");
+            }
+
             const toolsStr = pipelineResult.tools.join(" ➔ ");
             const statusMsg = pipelineResult.isClean
-                ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\``
-                : `⚠️ **Partial Extraction.**\n🧠 Pipeline: \`${toolsStr}\``;
+                ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\`${extraMsg}`
+                : `⚠️ **Partial Extraction.**\n🧠 Pipeline: \`${toolsStr}\`${extraMsg}`;
                 
             await interaction.editReply({ content: statusMsg, files: [new AttachmentBuilder(finalBuffer, { name: finalName })] }).catch(() => {});
         } else {
