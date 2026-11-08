@@ -17,7 +17,7 @@ class PythonBridge {
                     inputFile,
                     "-o", deobfPath
                 ];
-                const proc = spawn(cmd, args, { timeout: 120000 });
+                const proc = spawn(cmd, args, { timeout: 180000 });
 
                 let stderr = "";
                 let stdout = "";
@@ -43,7 +43,7 @@ class PythonBridge {
             if (tool === "prometheus") {
                 const cmd = "/opt/venv/bin/python3";
                 const args = [path.join(__dirname, "tools/prometheus/pol.py"), inputFile];
-                const proc = spawn(cmd, args, { timeout: 120000 });
+                const proc = spawn(cmd, args, { timeout: 180000 });
                 let stdout = "", stderr = "";
                 proc.stdout.on("data", (d) => { stdout += d.toString(); });
                 proc.stderr.on("data", (d) => { stderr += d.toString(); });
