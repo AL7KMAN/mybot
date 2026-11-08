@@ -5,36 +5,40 @@ const fs = require("fs");
 class MoonsecBridge {
     static async run(inputFile) {
         return new Promise((resolve) => {
-            const luacFile = inputFile + ".luac";
-            const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
-            const unluacPath = "/root/.cargo/bin/unluac-cli";
+            const polPath = path.join(__dirname, "tools/prometheus/pol.py");
 
-            const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { timeout: 60000, killSignal: 'SIGKILL' });
-            let stderr = "";
+            const proc = spawn("/opt/venv/bin/python3", [polPath, inputFile], { 
+                timeout: 120000, 
+                killSignal: 'SIGKILL' 
+            });
+            
+            let stdout = "", stderr = "";
+            proc.stdout.on("data", (d) => { stdout += d.toString(); });
             proc.stderr.on("data", (d) => { stderr += d.toString(); });
             
-            proc.on("error", () => resolve({ error: "DLL Execution Error" }));
-            
+            proc.on("error", (err) => {
+                resolve({ error: `Failed to start Prometheus: ${err.message}` });
+            });
+
             proc.on("close", (code) => {
-                if (code !== 0 || !fs.existsSync(luacFile)) {
-                    return resolve({ error: "Moonsec DLL failed to extract bytecode." });
+                const dir = path.dirname(inputFile);
+                let deobfFile = null;
+                try {
+                    const files = fs.readdirSync(dir);
+                    deobfFile = files.find(f => f.includes(".deobf") || f.includes("deobfuscated") || f.includes("output"));
+                } catch (e) {}
+
+                if (deobfFile) {
+                    const fullPath = path.join(dir, deobfFile);
+                    const text = fs.readFileSync(fullPath, "utf-8");
+                    return resolve({ text: text });
                 }
 
-                const unluacProc = spawn(unluacPath, [luacFile], { timeout: 60000, killSignal: 'SIGKILL' });
-                let out = "";
-                unluacProc.stdout.on("data", (d) => { out += d.toString(); });
+                if (stdout.length > 50) {
+                    return resolve({ text: stdout });
+                }
 
-                unluacProc.on("error", () => {
-                    resolve({ isBytecode: true, buffer: fs.readFileSync(luacFile) });
-                });
-
-                unluacProc.on("close", (jCode) => {
-                    if (jCode === 0 && out.length > 20) {
-                        resolve({ text: out });
-                    } else {
-                        resolve({ isBytecode: true, buffer: fs.readFileSync(luacFile) });
-                    }
-                });
+                resolve({ error: `Prometheus failed to deobfuscate. Code: ${code}. Error: ${stderr.slice(-500)}` });
             });
         });
     }
