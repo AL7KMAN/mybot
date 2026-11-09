@@ -10,7 +10,7 @@ class MoonsecBridge {
             if (!decompileResult.isBytecode) {
                 return decompileResult;
             }
-            return { error: `unluac failed. Reason: ${decompileResult.error}` };
+            return { error: `Pipeline failed. Reason: ${decompileResult.error}` };
         }
         
         return { error: `DLL failed: ${dllResult.error}` };
@@ -46,20 +46,23 @@ class MoonsecBridge {
     }
 
     static async tryDecompress(luacFile) {
-        const unluacRsPath = "/root/.cargo/bin/unluac-cli";
         const unluacJavaPath = path.join(__dirname, "unluac.jar");
         
-        const rsResult = await MoonsecBridge.tryRun(unluacRsPath, [luacFile], 60000);
+        // 1. نستخدم جافا أولاً لأننا قمنا بتعديلها
+        const javaResult = await MoonsecBridge.tryRun("java", ["-jar", unluacJavaPath, luacFile], 60000);
+        if (javaResult.success && javaResult.out.length > 50) {
+            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java Patched)");
+        }
+        
+        // 2. إذا فشلت جافا، نجرب Rust (مع إضافة -i لتصحيح خطأ الأمر)
+        const unluacRsPath = "/root/.cargo/bin/unluac-cli";
+        const rsResult = await MoonsecBridge.tryRun(unluacRsPath, ["-i", luacFile], 60000);
         if (rsResult.success && rsResult.out.length > 50) {
             return MoonsecBridge.formatOutput(rsResult.out, "unluac-rs (Rust)");
         }
         
-        const javaResult = await MoonsecBridge.tryRun("java", ["-jar", unluacJavaPath, luacFile], 60000);
-        if (javaResult.success && javaResult.out.length > 50) {
-            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
-        }
-        
-        const errorMsg = rsResult.error || javaResult.error || "Unknown decompiler error";
+        // نطبع خطأ جافا الحقيقي (لأنها الأداة اللي عدلناها)
+        const errorMsg = `Java Error: ${javaResult.error}`;
         return { isBytecode: true, error: errorMsg };
     }
     
