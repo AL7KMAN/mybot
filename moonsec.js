@@ -62,23 +62,6 @@ class MoonsecBridge {
         return { isBytecode: true, error: errorMsg };
     }
     
-    static extractStrings(code) {
-        const strings = new Set();
-        const regex = /["']((?:(?!\1).)*)\1/g;
-        let match;
-        while ((match = regex.exec(code)) !== null) {
-            const str = match[1];
-            if (str.length > 2 && !str.includes('\n') && !str.includes('\\')) {
-                strings.add(str);
-            }
-        }
-        if (strings.size > 0) {
-            const stringList = Array.from(strings).map(s => `print("${s}")`).join('\n');
-            return `-- Extracted Strings --\n${stringList}\n\n`;
-        }
-        return "";
-    }
-    
     static formatOutput(code, source) {
         let finalCode = code;
         
@@ -93,8 +76,18 @@ class MoonsecBridge {
         finalCode = finalCode.replace(/\n{3,}/g, '\n\n');
         finalCode = finalCode.trim();
         
-        const extractedStrings = MoonsecBridge.extractStrings(finalCode);
-        finalCode = extractedStrings + finalCode;
+        const stringMatches = finalCode.match(/["'](.*?)["']/g);
+        if (stringMatches) {
+            const uniqueStrings = [...new Set(stringMatches)].filter(s => s.length > 2 && !s.includes('\n') && !s.includes('\\'));
+            if (uniqueStrings.length > 0) {
+                let printBlock = 'print("=== الاكواد المشفرة داخل السكربت ===")\n';
+                uniqueStrings.forEach(s => {
+                    printBlock += `print(${s})\n`;
+                });
+                printBlock += 'print("=====================================")\n\n';
+                finalCode = printBlock + finalCode;
+            }
+        }
         
         const urls = finalCode.match(/https?:\/\/[^\s"'`]+/g) || [];
         const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
