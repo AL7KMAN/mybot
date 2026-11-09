@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
 
 RUN luarocks install bit32 || true
 
-RUN apt-get update && apt-get install -y dotnet-sdk-9.0
+RUN apt-get update && apt-get install -y dotnet-sdk-9
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
