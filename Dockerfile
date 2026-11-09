@@ -19,8 +19,8 @@ COPY . .
 
 RUN npm install
 
-RUN git clone https://github.com /app/prometheus-deobf \
-    && cd /app/prometheus-deobf && npm install
+RUN git clone https://github.com /app/prometheus-deobfuscator-core \
+    && cd /app/prometheus-deobfuscator-core && npm install
 
 RUN python3.12 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt || true
