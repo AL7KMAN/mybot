@@ -10,6 +10,7 @@ class MoonsecBridge {
             if (!decompileResult.isBytecode) {
                 try {
                     decompileResult.text = MoonsecBridge.inferVariableNames(decompileResult.text);
+                    decompileResult.text = MoonsecBridge.fixArabic(decompileResult.text);
                 } catch (e) {}
                 return decompileResult;
             }
@@ -48,32 +49,25 @@ class MoonsecBridge {
     }
 
     static async tryDecompress(luacFile) {
-        const unluacJavaPath = path.join(__dirname, "unluac.jar");
-        
-        const javaResult = await MoonsecBridge.tryRun("java", ["-Dfile.encoding=ISO-8859-1", "-Dstdout.encoding=ISO-8859-1", "-jar", unluacJavaPath, luacFile], 60000);
-        if (javaResult.success && javaResult.out.length > 50) {
-            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
-        }
-
         const unluacRsPath = "/root/.cargo/bin/unluac-cli";
         const rsResult = await MoonsecBridge.tryRun(unluacRsPath, ["-i", luacFile], 60000);
         if (rsResult.success && rsResult.out.length > 50) {
             return MoonsecBridge.formatOutput(rsResult.out, "unluac-rs (Rust)");
         }
         
-        const errorMsg = `Java: ${javaResult.error} | Rust: ${rsResult.error}`;
+        const unluacJavaPath = path.join(__dirname, "unluac.jar");
+        const javaResult = await MoonsecBridge.tryRun("java", ["-jar", unluacJavaPath, luacFile], 60000);
+        if (javaResult.success && javaResult.out.length > 50) {
+            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
+        }
+        
+        const errorMsg = `Rust: ${rsResult.error} | Java: ${javaResult.error}`;
         return { isBytecode: true, error: errorMsg };
     }
     
     static formatOutput(code, source) {
         let finalCode = code;
         
-        try {
-            const buf = Buffer.from(finalCode, 'binary');
-            const decoder = new TextDecoder('windows-1256');
-            finalCode = decoder.decode(buf);
-        } catch (e) {}
-
         finalCode = finalCode.replace(/^-- file:.*$/gm, '');
         finalCode = finalCode.replace(/^-- dialect:.*$/gm, '');
         finalCode = finalCode.replace(/^-- encoding:.*$/gm, '');
@@ -89,6 +83,34 @@ class MoonsecBridge {
         const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
         
         return { text: finalCode, urls: uniqueUrls, decompiler: source };
+    }
+
+    static fixArabic(code) {
+        let fixed = code;
+        
+        const dictionary = {
+            'ï؟½ططھط³ط§ط¨ ط§ظ„ظ†ظ‚ط§ط·': 'إحتساب النقاط',
+            'ï؟½ط¯طھظƒ ط¨ط§ظ„ط³ظٹط±ظپط±': 'مدتك بالسيرفر',
+            'ï؟½ظƒطھط¨ ط¥ط³ظ… ظ„ط§ط¹ط¨': 'اكتب إسم لاعب',
+            'ï؟½ط¯ط£': 'بدأ',
+            'ï؟½ط®ظˆظ„': 'دخول',
+            'ط®ط±ظˆط¬': 'خروج',
+            'ظ…ط¯ط©': 'مدة',
+            'ï؟½ط¯ط© ط¨ظ‚ط§ط¦ظƒ': 'مدة بقائك',
+            'ï؟½ï؟½ طھظ… ط§ظ„ظ†ط³ط®': 'تم النسخ',
+            'ï؟½ظ… ظ†ط³ط® ط§ظ„ظ…ط¹ظ„ظˆظ…ط§طھ طھظ„ظ‚ط§ط¦ظٹظ‹ط§ ط¥ظ„ظ‰ ط§ظ„طط§ظپط¸ط©.': 'تم نسخ المعلومات تلقائيًا إلى الحافظة.',
+            'ï؟½ط³ط® ط؛ظٹط± ظ…ط¯ط¹ظˆظ…': 'نسخ غير مدعوم',
+            'ï؟½ظ‡ط§ط²ظƒ ظ„ط§ ظٹط¯ط¹ظ… ط§ظ„ظ†ط³ط® ط§ظ„طھظ„ظ‚ط§ط¦ظٹ': 'جهازك لا يدعم النسخ التلقائي',
+            'ï؟½ط·ط£ ظپظٹ ط§ظ„ظ†ط³ط®': 'خطأ في النسخ',
+            'ï؟½ط¯ط« ط®ط·ط£ ط؛ظٹط± ظ…ط¹ط±ظˆظپ': 'حدث خطأ غير معروف',
+            'ï؟½ط¯ط© ط¨ظ‚ط§ط¦ظƒ: ': 'مدة بقائك: '
+        };
+
+        for (const [corrupted, correct] of Object.entries(dictionary)) {
+            fixed = fixed.split(corrupted).join(correct);
+        }
+
+        return fixed;
     }
 
     static inferVariableNames(code) {
@@ -138,8 +160,8 @@ class MoonsecBridge {
                 const proc = spawn(cmd, args, { timeout: timeoutMs, killSignal: 'SIGKILL' });
                 let out = "", err = "";
                 
-                proc.stdout.on("data", (data) => { out += data.toString('binary'); });
-                proc.stderr.on("data", (data) => { err += data.toString('utf8'); });
+                proc.stdout.on("data", (data) => { out += data.toString(); });
+                proc.stderr.on("data", (data) => { err += data.toString(); });
                 
                 proc.on("error", (e) => resolve({ success: false, out: "", error: e.message }));
                 proc.on("close", (code) => {
