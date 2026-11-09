@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
 
 RUN luarocks install bit32 || true
 
-RUN curl -sSL https://dot.net | bash -s -- --channel 9.0 --install-dir /usr/share/dotnet \
+RUN curl -sSL https://githubusercontent.com | bash -s -- --version 9.0.100 --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://rustup.rs | sh -s -- -y
