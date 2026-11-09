@@ -16,11 +16,6 @@ class MoonsecBridge {
             }
         }
         
-        const polResult = await MoonsecBridge.tryPol(inputFile);
-        if (polResult.success) {
-            return MoonsecBridge.formatOutput(polResult.text, "Prometheus (pol.py)");
-        }
-        
         return { error: `V2/V3 Pipeline failed. unluac collapsed and dynamic trace hook failed.` };
     }
     
@@ -117,37 +112,6 @@ class MoonsecBridge {
                     return resolve({ success: true, text: dumpedText });
                 }
                 resolve({ success: false, error: "Dynamic trace timed out or Roblox dependency caused early halt." });
-            });
-        });
-    }
-    
-    static async tryPol(inputFile) {
-        return new Promise((resolve) => {
-            const polPath = path.join(__dirname, "tools/prometheus/pol.py");
-            if (!fs.existsSync(polPath)) return resolve({ success: false, error: "pol.py not found" });
-            
-            const proc = spawn("/opt/venv/bin/python3", [polPath, inputFile], { 
-                timeout: 180000, 
-                killSignal: 'SIGKILL' 
-            });
-            
-            let stdout = "", stderr = "";
-            proc.stdout.on("data", (d) => { stdout += d.toString(); });
-            proc.stderr.on("data", (d) => { stderr += d.toString(); });
-            
-            proc.on("close", (code) => {
-                if (code === 0 && stdout.length > 100) {
-                    return resolve({ success: true, text: stdout });
-                }
-                const dir = path.dirname(inputFile);
-                try {
-                    const files = fs.readdirSync(dir);
-                    const deobfFile = files.find(f => f.endsWith(".lua") && f !== "input.lua");
-                    if (deobfFile) {
-                        return resolve({ success: true, text: fs.readFileSync(path.join(dir, deobfFile), "utf-8") });
-                    }
-                } catch (e) {}
-                resolve({ success: false, error: `exit ${code}: ${stderr.slice(-300)}` });
             });
         });
     }
