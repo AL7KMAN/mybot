@@ -10,12 +10,10 @@ RUN apt-get update && apt-get install -y \
 
 RUN luarocks install bit32 || true
 
-RUN wget https://githubusercontent.com -O dotnet-install.sh \
-    && chmod +x dotnet-install.sh \
-    && sed -i 's/\r$//' dotnet-install.sh \
-    && bash dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet \
-    && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
-    && rm dotnet-install.sh
+RUN wget https://microsoft.com -O packages-microsoft-prod.deb \
+    && dpkg -i packages-microsoft-prod.deb \
+    && rm packages-microsoft-prod.deb \
+    && apt-get update && apt-get install -y dotnet-sdk-9.0
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://rustup.rs | sh -s -- -y
 ENV PATH="/root/.cargo/bin:${PATH}"
