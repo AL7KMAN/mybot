@@ -89,16 +89,16 @@ class MoonsecBridge {
         let fixedCode = code;
         try {
             const buf = fs.readFileSync(luacPath);
-            let offset = 12;
+            let offset = 12; 
             
             const readInt = () => { const v = buf.readInt32LE(offset); offset += 4; return v; };
             const readByte = () => { return buf[offset++]; };
             const readString = () => {
                 const size = readInt();
                 if (size === 0) return null;
-                const str = buf.subarray(offset, offset + size - 1).toString('binary');
+                const strBuf = buf.subarray(offset, offset + size - 1);
                 offset += size;
-                return str;
+                return strBuf;
             };
 
             const strings = [];
@@ -118,8 +118,8 @@ class MoonsecBridge {
                 for (let i = 0; i < sizek; i++) {
                     const type = readByte();
                     if (type === 4) {
-                        const s = readString();
-                        if (s) strings.push(s);
+                        const sBuf = readString();
+                        if (sBuf) strings.push(sBuf);
                     } else if (type === 3) {
                         offset += 8;
                     } else if (type === 1) {
@@ -150,20 +150,27 @@ class MoonsecBridge {
             
             parseFunction();
 
-            for (const rawBinary of strings) {
-                const rawBuf = Buffer.from(rawBinary, 'binary');
-                const decoded = new TextDecoder('windows-1256').decode(rawBuf);
+            for (const strBuf of strings) {
+                const utf8Str = strBuf.toString('utf8');
+                const win1256Str = new TextDecoder('windows-1256').decode(strBuf);
                 
-                if (/[\u0600-\u06FF]/.test(decoded) && decoded.length > 1) {
-                    const rest = decoded.substring(1);
+                let correctStr = null;
+                if (utf8Str.includes('إ') || utf8Str.includes('ا') || utf8Str.includes('م') || utf8Str.includes('د')) {
+                    correctStr = utf8Str;
+                } else if (win1256Str.includes('إ') || win1256Str.includes('ا') || win1256Str.includes('م') || win1256Str.includes('د')) {
+                    correctStr = win1256Str;
+                }
+
+                if (correctStr && correctStr.length > 1) {
+                    const rest = correctStr.substring(1);
                     const corrupted1 = '\uFFFD' + rest;
                     const corrupted2 = 'ï؟½' + rest;
                     
                     if (fixedCode.includes(corrupted1)) {
-                        fixedCode = fixedCode.split(corrupted1).join(decoded);
+                        fixedCode = fixedCode.split(corrupted1).join(correctStr);
                     }
                     if (fixedCode.includes(corrupted2)) {
-                        fixedCode = fixedCode.split(corrupted2).join(decoded);
+                        fixedCode = fixedCode.split(corrupted2).join(correctStr);
                     }
                 }
             }
