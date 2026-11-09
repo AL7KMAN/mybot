@@ -46,34 +46,42 @@ class MoonsecBridge {
     }
 
     static async tryDecompress(luacFile) {
-        const unluacJavaPath = path.join(__dirname, "unluac.jar");
-        
-        // 1. نستخدم جافا أولاً لأننا قمنا بتعديلها
-        const javaResult = await MoonsecBridge.tryRun("java", ["-jar", unluacJavaPath, luacFile], 60000);
-        if (javaResult.success && javaResult.out.length > 50) {
-            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java Patched)");
-        }
-        
-        // 2. إذا فشلت جافا، نجرب Rust (مع إضافة -i لتصحيح خطأ الأمر)
         const unluacRsPath = "/root/.cargo/bin/unluac-cli";
         const rsResult = await MoonsecBridge.tryRun(unluacRsPath, ["-i", luacFile], 60000);
         if (rsResult.success && rsResult.out.length > 50) {
             return MoonsecBridge.formatOutput(rsResult.out, "unluac-rs (Rust)");
         }
         
-        // نطبع خطأ جافا الحقيقي (لأنها الأداة اللي عدلناها)
-        const errorMsg = `Java Error: ${javaResult.error}`;
+        const unluacJavaPath = path.join(__dirname, "unluac.jar");
+        const javaResult = await MoonsecBridge.tryRun("java", ["-jar", unluacJavaPath, luacFile], 60000);
+        if (javaResult.success && javaResult.out.length > 50) {
+            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
+        }
+        
+        const errorMsg = `Rust: ${rsResult.error} | Java: ${javaResult.error}`;
         return { isBytecode: true, error: errorMsg };
     }
     
     static formatOutput(code, source) {
         let finalCode = code;
+        
+        finalCode = finalCode.replace(/^-- file:.*$/gm, '');
+        finalCode = finalCode.replace(/^-- dialect:.*$/gm, '');
+        finalCode = finalCode.replace(/^-- encoding:.*$/gm, '');
+        finalCode = finalCode.replace(/^-- decompiled by.*$/gm, '');
+        
+        finalCode = finalCode.replace(/ -- proto#\d+.*$/gm, '');
+        
         finalCode = finalCode.replace(/-- PHASE_BOUNDARY:\w+\s*/g, '');
         finalCode = finalCode.replace(/-- \[\d+\]\s*/g, '');
         finalCode = finalCode.replace(/\[POL\] - /g, '-- ');
+        
         finalCode = finalCode.replace(/\n{3,}/g, '\n\n');
+        finalCode = finalCode.trim();
+        
         const urls = finalCode.match(/https?:\/\/[^\s"'`]+/g) || [];
         const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
+        
         return { text: finalCode, urls: uniqueUrls, decompiler: source };
     }
     
