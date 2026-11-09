@@ -8,11 +8,13 @@ class MoonsecBridge {
         if (dllResult.success) {
             const decompileResult = await MoonsecBridge.tryDecompress(dllResult.luacFile);
             if (!decompileResult.isBytecode) {
+                try {
+                    decompileResult.text = MoonsecBridge.inferVariableNames(decompileResult.text);
+                } catch (err) {}
                 return decompileResult;
             }
             return { error: `Pipeline failed. Reason: ${decompileResult.error}` };
         }
-        
         return { error: `DLL failed: ${dllResult.error}` };
     }
     
@@ -93,6 +95,33 @@ class MoonsecBridge {
         const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
         
         return { text: finalCode, urls: uniqueUrls, decompiler: source };
+    }
+
+    static inferVariableNames(code) {
+        let modified = code;
+        const map = new Map();
+
+        const serviceRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[:\.]GetService\s*\(\s*["']([^"']+)["']\s*\)/g;
+        let match;
+        while ((match = serviceRegex.exec(code)) !== null) {
+            const varName = match[1];
+            const serviceName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
+            map.set(varName, serviceName + "_Service");
+        }
+
+        const instanceRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[\.\:]new\s*\(\s*["']([^"']+)["']\s*\)/g;
+        while ((match = instanceRegex.exec(code)) !== null) {
+            const varName = match[1];
+            const className = match[2].replace(/[^a-zA-Z0-9_]/g, "");
+            map.set(varName, className + "_Inst");
+        }
+
+        map.forEach((newName, oldName) => {
+            const regex = new RegExp(`\\b${oldName}\\b`, 'g');
+            modified = modified.replace(regex, newName);
+        });
+
+        return modified;
     }
     
     static tryRun(cmd, args, timeoutMs) {
