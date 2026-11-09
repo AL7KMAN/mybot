@@ -23,6 +23,7 @@ WORKDIR /app
 COPY . .
 
 RUN npm install
+RUN npm install luaparse
 
 RUN git clone https://github.com/prostone4/Prometheus-Deobfuscator.git /app/prometheus-deobf && \
     cd /app/prometheus-deobf && npm install
@@ -45,10 +46,8 @@ RUN git clone https://github.com/x3zvawq/unluac-rs.git /app/unluac-rs && \
 RUN git clone https://github.com/HansWessels/unluac.git /app/unluac-src && \
     cd /app/unluac-src && \
     grep -rl "Implicit return must have zero values" src/ | xargs -r sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' && \
-    sed -i 's/StringBuilder b = new StringBuilder();/\/\/ Replaced by LM7H for Arabic support/g' src/unluac/parse/LString.java && \
-    sed -i 's/for(int i = 0; i < size - 1; i++) {/byte[] rawBytes = new byte[size - 1]; for(int i = 0; i < size - 1; i++) { rawBytes[i] = buffer.get(); } for(int i = 0; i < 0; i++) {/' src/unluac/parse/LString.java && \
-    sed -i 's/b.append((char) buffer.get());/\/\/ ignored/g' src/unluac/parse/LString.java && \
-    sed -i 's/value = b.toString();/try { value = new String(rawBytes, "ISO-8859-1"); } catch(Exception e) { value = ""; }/g' src/unluac/parse/LString.java && \
+    sed -i 's/new String(bytes, StandardCharsets.UTF_8)/new String(bytes, StandardCharsets.ISO_8859_1)/g' src/unluac/parse/LString.java && \
+    grep -rl "Charset.forName" src/ | xargs -r sed -i 's/Charset.forName("UTF-8")/Charset.forName("ISO-8859-1")/g' && \
     chmod +x build.sh && \
     ./build.sh && \
     cp bin/unluac.jar /app/unluac.jar
