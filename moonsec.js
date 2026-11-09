@@ -62,6 +62,23 @@ class MoonsecBridge {
         return { isBytecode: true, error: errorMsg };
     }
     
+    static extractStrings(code) {
+        const strings = new Set();
+        const regex = /["']((?:(?!\1).)*)\1/g;
+        let match;
+        while ((match = regex.exec(code)) !== null) {
+            const str = match[1];
+            if (str.length > 2 && !str.includes('\n') && !str.includes('\\')) {
+                strings.add(str);
+            }
+        }
+        if (strings.size > 0) {
+            const stringList = Array.from(strings).map(s => `print("${s}")`).join('\n');
+            return `-- Extracted Strings --\n${stringList}\n\n`;
+        }
+        return "";
+    }
+    
     static formatOutput(code, source) {
         let finalCode = code;
         
@@ -69,15 +86,15 @@ class MoonsecBridge {
         finalCode = finalCode.replace(/^-- dialect:.*$/gm, '');
         finalCode = finalCode.replace(/^-- encoding:.*$/gm, '');
         finalCode = finalCode.replace(/^-- decompiled by.*$/gm, '');
-        
         finalCode = finalCode.replace(/ -- proto#\d+.*$/gm, '');
-        
         finalCode = finalCode.replace(/-- PHASE_BOUNDARY:\w+\s*/g, '');
         finalCode = finalCode.replace(/-- \[\d+\]\s*/g, '');
         finalCode = finalCode.replace(/\[POL\] - /g, '-- ');
-        
         finalCode = finalCode.replace(/\n{3,}/g, '\n\n');
         finalCode = finalCode.trim();
+        
+        const extractedStrings = MoonsecBridge.extractStrings(finalCode);
+        finalCode = extractedStrings + finalCode;
         
         const urls = finalCode.match(/https?:\/\/[^\s"'`]+/g) || [];
         const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
