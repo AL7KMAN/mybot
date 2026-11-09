@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     curl git python3.12 python3-pip python3.12-venv \
     wget default-jdk lua5.1 luarocks unzip build-essential \
-    nodejs npm software-properties-common \
+    ant nodejs npm software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
 RUN luarocks install bit32 || true
@@ -45,6 +45,10 @@ RUN git clone https://github.com/x3zvawq/unluac-rs.git /app/unluac-rs && \
 RUN git clone https://github.com/HansWessels/unluac.git /app/unluac-src && \
     cd /app/unluac-src && \
     grep -rl "Implicit return must have zero values" src/ | xargs -r sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' && \
+    sed -i 's/StringBuilder b = new StringBuilder();/\/\/ Replaced by LM7H for Arabic support/g' src/unluac/parse/LString.java && \
+    sed -i 's/for(int i = 0; i < size - 1; i++) {/byte[] rawBytes = new byte[size - 1]; for(int i = 0; i < size - 1; i++) { rawBytes[i] = buffer.get(); } for(int i = 0; i < 0; i++) {/' src/unluac/parse/LString.java && \
+    sed -i 's/b.append((char) buffer.get());/\/\/ ignored/g' src/unluac/parse/LString.java && \
+    sed -i 's/value = b.toString();/try { value = new String(rawBytes, "ISO-8859-1"); } catch(Exception e) { value = ""; }/g' src/unluac/parse/LString.java && \
     chmod +x build.sh && \
     ./build.sh && \
     cp bin/unluac.jar /app/unluac.jar
