@@ -1,6 +1,12 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV REPO_CORE="https://github.com"
+ENV REPO_PROM="https://github.com"
+ENV REPO_DEVS="https://github.com"
+ENV REPO_MOON="https://github.com"
+ENV REPO_RUST="https://github.com"
+ENV REPO_JAVA="https://github.com"
 
 RUN apt-get update && apt-get install -y \
     curl git python3.12 python3-pip python3.12-venv \
@@ -19,30 +25,30 @@ COPY . .
 
 RUN npm install
 
-RUN git clone https://github.com /app/prometheus-deobfuscator-core \
+RUN git clone ${REPO_CORE} /app/prometheus-deobfuscator-core \
     && cd /app/prometheus-deobfuscator-core && npm install
 
 RUN python3.12 -m venv /opt/venv \
     && /opt/venv/bin/pip install --no-cache-dir -r requirements.txt || true
 
-RUN mkdir -p tools && \
-    git clone https://github.com tools/prometheus && \
-    git clone https://github.com tools/wearedevs && \
-    mkdir -p /app/tools/wearedevs/lua_linux && \
-    cp /usr/bin/lua5.1 /app/tools/wearedevs/lua_linux/lua5.1 && \
-    chmod +x /app/tools/wearedevs/lua_linux/lua5.1 && \
-    git clone https://github.com tools/moonsec && \
-    cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
+RUN mkdir -p tools \
+    && git clone ${REPO_PROM} tools/prometheus \
+    && git clone ${REPO_DEVS} tools/wearedevs \
+    && mkdir -p /app/tools/wearedevs/lua_linux \
+    && cp /usr/bin/lua5.1 /app/tools/wearedevs/lua_linux/lua5.1 \
+    && chmod +x /app/tools/wearedevs/lua_linux/lua5.1 \
+    && git clone ${REPO_MOON} tools/moonsec \
+    && cd tools/moonsec && dotnet publish -c Release -f net9.0 -o /app/moonsec_bin
 
-RUN git clone https://github.com /app/unluac-rs && \
-    cd /app/unluac-rs && \
-    cargo install --path packages/unluac-cli
+RUN git clone ${REPO_RUST} /app/unluac-rs \
+    && cd /app/unluac-rs \
+    && cargo install --path packages/unluac-cli
 
-RUN git clone https://github.com /app/unluac-src && \
-    cd /app/unluac-src && \
-    FILE_TO_PATCH=$(grep -rl "Implicit return must have zero values" src/) && \
-    sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' $FILE_TO_PATCH && \
-    ant && \
-    cp unluac.jar /app/unluac.jar
+RUN git clone ${REPO_JAVA} /app/unluac-src \
+    && cd /app/unluac-src \
+    && FILE_TO_PATCH=$(grep -rl "Implicit return must have zero values" src/) \
+    && sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' $FILE_TO_PATCH \
+    && ant \
+    && cp unluac.jar /app/unluac.jar
 
 CMD ["npm", "start"]
