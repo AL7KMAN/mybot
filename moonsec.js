@@ -48,19 +48,20 @@ class MoonsecBridge {
     }
 
     static async tryDecompress(luacFile) {
+        const unluacJavaPath = path.join(__dirname, "unluac.jar");
+        
+        const javaResult = await MoonsecBridge.tryRun("java", ["-Dfile.encoding=ISO-8859-1", "-Dstdout.encoding=ISO-8859-1", "-jar", unluacJavaPath, luacFile], 60000);
+        if (javaResult.success && javaResult.out.length > 50) {
+            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
+        }
+
         const unluacRsPath = "/root/.cargo/bin/unluac-cli";
         const rsResult = await MoonsecBridge.tryRun(unluacRsPath, ["-i", luacFile], 60000);
         if (rsResult.success && rsResult.out.length > 50) {
             return MoonsecBridge.formatOutput(rsResult.out, "unluac-rs (Rust)");
         }
         
-        const unluacJavaPath = path.join(__dirname, "unluac.jar");
-        const javaResult = await MoonsecBridge.tryRun("java", ["-Dfile.encoding=windows-1256", "-Dstdout.encoding=windows-1256", "-jar", unluacJavaPath, luacFile], 60000);
-        if (javaResult.success && javaResult.out.length > 50) {
-            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
-        }
-        
-        const errorMsg = `Rust: ${rsResult.error} | Java: ${javaResult.error}`;
+        const errorMsg = `Java: ${javaResult.error} | Rust: ${rsResult.error}`;
         return { isBytecode: true, error: errorMsg };
     }
     
@@ -68,13 +69,9 @@ class MoonsecBridge {
         let finalCode = code;
         
         try {
-            const buffer = Buffer.from(finalCode, 'binary');
+            const buf = Buffer.from(finalCode, 'binary');
             const decoder = new TextDecoder('windows-1256');
-            let decoded = decoder.decode(buffer);
-            
-            if (/[\u0600-\u06FF]/.test(decoded)) {
-                finalCode = decoded;
-            }
+            finalCode = decoder.decode(buf);
         } catch (e) {}
 
         finalCode = finalCode.replace(/^-- file:.*$/gm, '');
@@ -142,7 +139,7 @@ class MoonsecBridge {
                 let out = "", err = "";
                 
                 proc.stdout.on("data", (data) => { out += data.toString('binary'); });
-                proc.stderr.on("data", (data) => { err += data.toString(); });
+                proc.stderr.on("data", (data) => { err += data.toString('utf8'); });
                 
                 proc.on("error", (e) => resolve({ success: false, out: "", error: e.message }));
                 proc.on("close", (code) => {
