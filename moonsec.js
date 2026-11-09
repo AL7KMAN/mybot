@@ -78,19 +78,6 @@ class MoonsecBridge {
         finalCode = finalCode.replace(/\n{3,}/g, '\n\n');
         finalCode = finalCode.trim();
         
-        const stringMatches = finalCode.match(/["'](.*?)["']/g);
-        if (stringMatches) {
-            const uniqueStrings = [...new Set(stringMatches)].filter(s => s.length > 2 && !s.includes('\n') && !s.includes('\\'));
-            if (uniqueStrings.length > 0) {
-                let printBlock = 'print("=== الاكواد المشفرة داخل السكربت ===")\n';
-                uniqueStrings.forEach(s => {
-                    printBlock += `print(${s})\n`;
-                });
-                printBlock += 'print("=====================================")\n\n';
-                finalCode = printBlock + finalCode;
-            }
-        }
-        
         const urls = finalCode.match(/https?:\/\/[^\s"'`]+/g) || [];
         const uniqueUrls = [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
         
