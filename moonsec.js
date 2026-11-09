@@ -1,6 +1,7 @@
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const luaparse = require("luaparse");
 
 class MoonsecBridge {
     static async run(inputFile) {
@@ -10,8 +11,7 @@ class MoonsecBridge {
             if (!decompileResult.isBytecode) {
                 try {
                     decompileResult.text = MoonsecBridge.inferVariableNames(decompileResult.text);
-                    decompileResult.text = MoonsecBridge.fixEncoding(decompileResult.text, dllResult.luacFile);
-                } catch (e) {}
+                } catch (astError) {}
                 return decompileResult;
             }
             return { error: `Pipeline failed. Reason: ${decompileResult.error}` };
@@ -49,25 +49,34 @@ class MoonsecBridge {
     }
 
     static async tryDecompress(luacFile) {
+        const unluacJavaPath = path.join(__dirname, "unluac.jar");
+        
+        // استخدام جافا أولاً لأننا عدلنا الترميز فيها
+        const javaResult = await MoonsecBridge.tryRun("java", ["-Dfile.encoding=ISO-8859-1", "-Dstdout.encoding=ISO-8859-1", "-jar", unluacJavaPath, luacFile], 60000);
+        if (javaResult.success && javaResult.out.length > 50) {
+            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
+        }
+        
         const unluacRsPath = "/root/.cargo/bin/unluac-cli";
         const rsResult = await MoonsecBridge.tryRun(unluacRsPath, ["-i", luacFile], 60000);
         if (rsResult.success && rsResult.out.length > 50) {
             return MoonsecBridge.formatOutput(rsResult.out, "unluac-rs (Rust)");
         }
         
-        const unluacJavaPath = path.join(__dirname, "unluac.jar");
-        const javaResult = await MoonsecBridge.tryRun("java", ["-jar", unluacJavaPath, luacFile], 60000);
-        if (javaResult.success && javaResult.out.length > 50) {
-            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
-        }
-        
-        const errorMsg = `Rust: ${rsResult.error} | Java: ${javaResult.error}`;
+        const errorMsg = `Java: ${javaResult.error} | Rust: ${rsResult.error}`;
         return { isBytecode: true, error: errorMsg };
     }
     
     static formatOutput(code, source) {
         let finalCode = code;
         
+        // تحويل النص من الترميز الخام إلى العربي
+        try {
+            const buf = Buffer.from(finalCode, 'binary');
+            const decoder = new TextDecoder('windows-1256');
+            finalCode = decoder.decode(buf);
+        } catch (e) {}
+
         finalCode = finalCode.replace(/^-- file:.*$/gm, '');
         finalCode = finalCode.replace(/^-- dialect:.*$/gm, '');
         finalCode = finalCode.replace(/^-- encoding:.*$/gm, '');
@@ -85,209 +94,66 @@ class MoonsecBridge {
         return { text: finalCode, urls: uniqueUrls, decompiler: source };
     }
 
-    static extractLuacStrings(luacPath) {
-        const strings = [];
+    static inferVariableNames(luaCode) {
+        let modifiedCode = luaCode;
+        const renameMap = new Map();
+
         try {
-            const buf = fs.readFileSync(luacPath);
-            let offset = 0;
-            if (buf.readUInt8(0) !== 0x1b) return [];
-            if (buf.toString('utf8', 1, 4) !== 'Lua') return [];
-            offset = 4;
-            const version = buf.readUInt8(offset++);
-            const format = buf.readUInt8(offset++);
-            const endianness = buf.readUInt8(offset++);
-            const intSize = buf.readUInt8(offset++);
-            const sizeTSize = buf.readUInt8(offset++);
-            const instructionSize = buf.readUInt8(offset++);
-            const numberSize = buf.readUInt8(offset++);
-            const integral = buf.readUInt8(offset++);
+            const ast = luaparse.parse(luaCode);
             
-            const isLittleEndian = (endianness === 1);
-            
-            const readInt = () => {
-                let v;
-                if (intSize === 4) v = isLittleEndian ? buf.readInt32LE(offset) : buf.readInt32BE(offset);
-                else v = Number(isLittleEndian ? buf.readBigInt64LE(offset) : buf.readBigInt64BE(offset));
-                offset += intSize;
-                return v;
-            };
-            
-            const readSizeT = () => {
-                let v;
-                if (sizeTSize === 4) v = isLittleEndian ? buf.readUInt32LE(offset) : buf.readUInt32BE(offset);
-                else v = Number(isLittleEndian ? buf.readBigUInt64LE(offset) : buf.readBigUInt64BE(offset));
-                offset += sizeTSize;
-                return v;
-            };
-            
-            const readString = () => {
-                const size = readSizeT();
-                if (size === 0) return null;
-                const strBuf = buf.subarray(offset, offset + size - 1);
-                offset += size;
-                return strBuf;
-            };
-            
-            const parseFunction = () => {
-                readString();
-                readInt();
-                readInt();
-                buf.readUInt8(offset++);
-                buf.readUInt8(offset++);
-                buf.readUInt8(offset++);
-                buf.readUInt8(offset++);
+            const traverse = (node) => {
+                if (!node) return;
 
-                const sizecode = readInt();
-                offset += sizecode * instructionSize;
+                if (node.type === 'LocalStatement') {
+                    for (let i = 0; i < node.variables.length; i++) {
+                        const varNode = node.variables[i];
+                        const initNode = node.init[i];
+                        
+                        if (varNode && varNode.type === 'Identifier' && initNode && initNode.type === 'CallExpression') {
+                            const base = initNode.base;
+                            const args = initNode.arguments || [];
+                            
+                            let newName = null;
 
-                const sizek = readInt();
-                for (let i = 0; i < sizek; i++) {
-                    const type = buf.readUInt8(offset++);
-                    if (type === 4) {
-                        const s = readString();
-                        if (s) strings.push(s);
-                    } else if (type === 3) {
-                        offset += numberSize;
-                    } else if (type === 1) {
-                        offset += 1;
-                    } else if (type === 0) {
-                    } else {
-                        throw new Error("Unknown constant type");
+                            if (base && base.type === 'MemberExpression' && base.identifier && base.identifier.name === 'GetService') {
+                                if (args.length > 0 && args[0].type === 'StringLiteral') {
+                                    newName = args[0].value.replace(/[^a-zA-Z0-9_]/g, "") + "_Service";
+                                }
+                            }
+                            
+                            if (base && base.type === 'MemberExpression' && base.base && base.base.name === 'Instance' && base.identifier && base.identifier.name === 'new') {
+                                if (args.length > 0 && args[0].type === 'StringLiteral') {
+                                    newName = args[0].value.replace(/[^a-zA-Z0-9_]/g, "") + "_Inst";
+                                }
+                            }
+
+                            if (newName && (varNode.name.startsWith('r') || varNode.name.startsWith('p'))) {
+                                renameMap.set(varNode.name, newName);
+                            }
+                        }
                     }
                 }
 
-                const sizep = readInt();
-                for (let i = 0; i < sizep; i++) {
-                    parseFunction();
-                }
-
-                const sizelineinfo = readInt();
-                offset += sizelineinfo * intSize;
-
-                const sizelocvars = readInt();
-                for (let i = 0; i < sizelocvars; i++) {
-                    readString();
-                    readInt();
-                    readInt();
-                }
-
-                const sizeupvalues = readInt();
-                for (let i = 0; i < sizeupvalues; i++) {
-                    readString();
+                for (let key in node) {
+                    if (node[key] && typeof node[key] === 'object') {
+                        if (Array.isArray(node[key])) {
+                            node[key].forEach(traverse);
+                        } else {
+                            traverse(node[key]);
+                        }
+                    }
                 }
             };
-            
-            parseFunction();
+
+            traverse(ast);
         } catch (e) {}
-        return strings;
-    }
 
-    static fixEncoding(code, luacPath) {
-        let fixedCode = code;
-        try {
-            const rawStrings = MoonsecBridge.extractLuacStrings(luacPath);
-            const decodedStrings = [];
-            for (const buf of rawStrings) {
-                const utf8 = buf.toString('utf8');
-                const win = new TextDecoder('windows-1256').decode(buf);
-                
-                if (utf8.includes('�')) {
-                    if (!win.includes('�')) decodedStrings.push(win);
-                    else decodedStrings.push(utf8);
-                } else {
-                    decodedStrings.push(utf8);
-                }
-            }
-
-            const codeStringRegex = /(["'])((?:\\.|(?!\1).)*)\1/g;
-            fixedCode = fixedCode.replace(codeStringRegex, (match, quote, content) => {
-                if (!content.includes('�') && !content.includes('ï؟½') && !content.includes('?')) {
-                    return match;
-                }
-
-                let bestMatch = null;
-                let maxScore = -1;
-
-                for (const correct of decodedStrings) {
-                    if (correct.length < 2) continue;
-                    
-                    let score = 0;
-                    if (correct[0] === content[0]) score += 10;
-                    
-                    let suffixLen = 0;
-                    while (suffixLen < correct.length && suffixLen < content.length && correct[correct.length - 1 - suffixLen] === content[content.length - 1 - suffixLen]) {
-                        suffixLen++;
-                    }
-                    score += suffixLen * 5;
-
-                    let prefixLen = 0;
-                    while (prefixLen < correct.length && prefixLen < content.length && correct[prefixLen] === content[prefixLen]) {
-                        prefixLen++;
-                    }
-                    score += prefixLen * 5;
-
-                    const setA = new Set(correct.split(''));
-                    let commonChars = 0;
-                    for (const c of content) {
-                        if (setA.has(c)) commonChars++;
-                    }
-                    score += commonChars;
-
-                    if (score > maxScore) {
-                        maxScore = score;
-                        bestMatch = correct;
-                    }
-                }
-
-                if (bestMatch && maxScore > 10) {
-                    return quote + bestMatch + quote;
-                }
-                return match;
-            });
-
-        } catch (e) {}
-        return fixedCode;
-    }
-
-    static inferVariableNames(code) {
-        let modified = code;
-        const map = new Map();
-
-        const servRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[:\.]GetService\s*\(\s*["']([^"']+)["']\s*\)/g;
-        let match;
-        while ((match = servRegex.exec(code)) !== null) {
-            const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-            const newName = cleanName + "_Service";
-            if (!Array.from(map.values()).includes(newName)) {
-                map.set(match[1], newName);
-            }
-        }
-
-        const instRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[\.\:]new\s*\(\s*["']([^"']+)["']/g;
-        while ((match = instRegex.exec(code)) !== null) {
-            const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-            const newName = cleanName + "_Inst";
-            if (!Array.from(map.values()).includes(newName)) {
-                map.set(match[1], newName);
-            }
-        }
-
-        const lpRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\.LocalPlayer/g;
-        while ((match = lpRegex.exec(code)) !== null) {
-            const newName = "LocalPlayer";
-            if (!Array.from(map.values()).includes(newName)) {
-                map.set(match[1], newName);
-            }
-        }
-
-        const sortedKeys = Array.from(map.keys()).sort((a, b) => b.length - a.length);
-        for (const oldName of sortedKeys) {
-            const newName = map.get(oldName);
+        renameMap.forEach((newName, oldName) => {
             const regex = new RegExp(`\\b${oldName}\\b`, 'g');
-            modified = modified.replace(regex, newName);
-        }
+            modifiedCode = modifiedCode.replace(regex, newName);
+        });
 
-        return modified;
+        return modifiedCode;
     }
     
     static tryRun(cmd, args, timeoutMs) {
@@ -296,8 +162,8 @@ class MoonsecBridge {
                 const proc = spawn(cmd, args, { timeout: timeoutMs, killSignal: 'SIGKILL' });
                 let out = "", err = "";
                 
-                proc.stdout.on("data", (data) => { out += data.toString(); });
-                proc.stderr.on("data", (data) => { err += data.toString(); });
+                proc.stdout.on("data", (data) => { out += data.toString('binary'); });
+                proc.stderr.on("data", (data) => { err += data.toString('utf8'); });
                 
                 proc.on("error", (e) => resolve({ success: false, out: "", error: e.message }));
                 proc.on("close", (code) => {
