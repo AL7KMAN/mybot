@@ -48,28 +48,35 @@ class MoonsecBridge {
     }
 
     static async tryDecompress(luacFile) {
-        const unluacJavaPath = path.join(__dirname, "unluac.jar");
-        
-        // شغلنا Java أولاً مع ترميز windows-1256 عشان نطلع العربي صدق
-        const javaResult = await MoonsecBridge.tryRun("java", ["-Dfile.encoding=windows-1256", "-jar", unluacJavaPath, luacFile], 60000);
-        if (javaResult.success && javaResult.out.length > 50) {
-            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
-        }
-
-        // لو فشلت جافا، نجرب Rust
         const unluacRsPath = "/root/.cargo/bin/unluac-cli";
         const rsResult = await MoonsecBridge.tryRun(unluacRsPath, ["-i", luacFile], 60000);
         if (rsResult.success && rsResult.out.length > 50) {
             return MoonsecBridge.formatOutput(rsResult.out, "unluac-rs (Rust)");
         }
         
-        const errorMsg = `Java: ${javaResult.error} | Rust: ${rsResult.error}`;
+        const unluacJavaPath = path.join(__dirname, "unluac.jar");
+        const javaResult = await MoonsecBridge.tryRun("java", ["-Dfile.encoding=windows-1256", "-Dstdout.encoding=windows-1256", "-jar", unluacJavaPath, luacFile], 60000);
+        if (javaResult.success && javaResult.out.length > 50) {
+            return MoonsecBridge.formatOutput(javaResult.out, "unluac (Java)");
+        }
+        
+        const errorMsg = `Rust: ${rsResult.error} | Java: ${javaResult.error}`;
         return { isBytecode: true, error: errorMsg };
     }
     
     static formatOutput(code, source) {
         let finalCode = code;
         
+        try {
+            const buffer = Buffer.from(finalCode, 'binary');
+            const decoder = new TextDecoder('windows-1256');
+            let decoded = decoder.decode(buffer);
+            
+            if (/[\u0600-\u06FF]/.test(decoded)) {
+                finalCode = decoded;
+            }
+        } catch (e) {}
+
         finalCode = finalCode.replace(/^-- file:.*$/gm, '');
         finalCode = finalCode.replace(/^-- dialect:.*$/gm, '');
         finalCode = finalCode.replace(/^-- encoding:.*$/gm, '');
@@ -134,7 +141,7 @@ class MoonsecBridge {
                 const proc = spawn(cmd, args, { timeout: timeoutMs, killSignal: 'SIGKILL' });
                 let out = "", err = "";
                 
-                proc.stdout.on("data", (data) => { out += data.toString(); });
+                proc.stdout.on("data", (data) => { out += data.toString('binary'); });
                 proc.stderr.on("data", (data) => { err += data.toString(); });
                 
                 proc.on("error", (e) => resolve({ success: false, out: "", error: e.message }));
