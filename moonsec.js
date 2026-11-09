@@ -88,44 +88,42 @@ class MoonsecBridge {
     static fixEncoding(code, luacPath) {
         let fixedCode = code;
         try {
-            const buffer = fs.readFileSync(luacPath);
-            let offset = 12; 
-            offset += 1; 
+            const buf = fs.readFileSync(luacPath);
+            let offset = 12;
             
-            const rawStrings = [];
-            
-            const readInt = () => { const v = buffer.readInt32LE(offset); offset += 4; return v; };
-            const readByte = () => { return buffer[offset++]; };
+            const readInt = () => { const v = buf.readInt32LE(offset); offset += 4; return v; };
+            const readByte = () => { return buf[offset++]; };
             const readString = () => {
                 const size = readInt();
                 if (size === 0) return null;
-                const data = buffer.subarray(offset, offset + size - 1); 
+                const str = buf.subarray(offset, offset + size - 1).toString('binary');
                 offset += size;
-                return data;
+                return str;
             };
 
+            const strings = [];
             const parseFunction = () => {
-                readString(); 
-                readInt(); 
-                readInt(); 
-                readByte(); 
-                readByte(); 
-                readByte(); 
-                readByte(); 
+                readString();
+                readInt();
+                readInt();
+                readByte();
+                readByte();
+                readByte();
+                readByte();
                 
                 const sizecode = readInt();
-                offset += sizecode * 4; 
+                offset += sizecode * 4;
                 
                 const sizek = readInt();
                 for (let i = 0; i < sizek; i++) {
                     const type = readByte();
-                    if (type === 4) { 
+                    if (type === 4) {
                         const s = readString();
-                        if (s) rawStrings.push(s);
-                    } else if (type === 3) { 
-                        offset += 8; 
-                    } else if (type === 1) { 
-                        offset += 1; 
+                        if (s) strings.push(s);
+                    } else if (type === 3) {
+                        offset += 8;
+                    } else if (type === 1) {
+                        offset += 1;
                     }
                 }
                 
@@ -139,9 +137,9 @@ class MoonsecBridge {
                 
                 const sizelocvars = readInt();
                 for (let i = 0; i < sizelocvars; i++) {
-                    readString(); 
-                    readInt(); 
-                    readInt(); 
+                    readString();
+                    readInt();
+                    readInt();
                 }
                 
                 const sizeupvalues = readInt();
@@ -152,18 +150,20 @@ class MoonsecBridge {
             
             parseFunction();
 
-            for (const rawBuf of rawStrings) {
-                const corrupted = new TextDecoder('windows-1256').decode(rawBuf);
-                const correctUtf8 = new TextDecoder('utf-8').decode(rawBuf);
+            for (const rawBinary of strings) {
+                const rawBuf = Buffer.from(rawBinary, 'binary');
+                const decoded = new TextDecoder('windows-1256').decode(rawBuf);
                 
-                if (!correctUtf8.includes('�')) {
-                    if (fixedCode.includes(corrupted)) {
-                        fixedCode = fixedCode.split(corrupted).join(correctUtf8);
+                if (/[\u0600-\u06FF]/.test(decoded) && decoded.length > 1) {
+                    const rest = decoded.substring(1);
+                    const corrupted1 = '\uFFFD' + rest;
+                    const corrupted2 = 'ï؟½' + rest;
+                    
+                    if (fixedCode.includes(corrupted1)) {
+                        fixedCode = fixedCode.split(corrupted1).join(decoded);
                     }
-                } else {
-                    const corruptedUtf8 = rawBuf.toString('utf8');
-                    if (fixedCode.includes(corruptedUtf8)) {
-                        fixedCode = fixedCode.split(corruptedUtf8).join(corrupted);
+                    if (fixedCode.includes(corrupted2)) {
+                        fixedCode = fixedCode.split(corrupted2).join(decoded);
                     }
                 }
             }
