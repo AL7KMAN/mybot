@@ -85,63 +85,92 @@ class MoonsecBridge {
         return { text: finalCode, urls: uniqueUrls, decompiler: source };
     }
 
-    static fixEncoding(code, luacPath) {
-        let fixedCode = code;
+    static extractLuacStrings(luacPath) {
+        const strings = [];
         try {
             const buf = fs.readFileSync(luacPath);
-            let offset = 12; 
+            let offset = 0;
+            if (buf.readUInt8(0) !== 0x1b) return [];
+            if (buf.toString('utf8', 1, 4) !== 'Lua') return [];
+            offset = 4;
+            const version = buf.readUInt8(offset++);
+            const format = buf.readUInt8(offset++);
+            const endianness = buf.readUInt8(offset++);
+            const intSize = buf.readUInt8(offset++);
+            const sizeTSize = buf.readUInt8(offset++);
+            const instructionSize = buf.readUInt8(offset++);
+            const numberSize = buf.readUInt8(offset++);
+            const integral = buf.readUInt8(offset++);
             
-            const readInt = () => { const v = buf.readInt32LE(offset); offset += 4; return v; };
-            const readByte = () => { return buf[offset++]; };
+            const isLittleEndian = (endianness === 1);
+            
+            const readInt = () => {
+                let v;
+                if (intSize === 4) v = isLittleEndian ? buf.readInt32LE(offset) : buf.readInt32BE(offset);
+                else v = Number(isLittleEndian ? buf.readBigInt64LE(offset) : buf.readBigInt64BE(offset));
+                offset += intSize;
+                return v;
+            };
+            
+            const readSizeT = () => {
+                let v;
+                if (sizeTSize === 4) v = isLittleEndian ? buf.readUInt32LE(offset) : buf.readUInt32BE(offset);
+                else v = Number(isLittleEndian ? buf.readBigUInt64LE(offset) : buf.readBigUInt64BE(offset));
+                offset += sizeTSize;
+                return v;
+            };
+            
             const readString = () => {
-                const size = readInt();
+                const size = readSizeT();
                 if (size === 0) return null;
                 const strBuf = buf.subarray(offset, offset + size - 1);
                 offset += size;
                 return strBuf;
             };
-
-            const strings = [];
+            
             const parseFunction = () => {
                 readString();
                 readInt();
                 readInt();
-                readByte();
-                readByte();
-                readByte();
-                readByte();
-                
+                buf.readUInt8(offset++);
+                buf.readUInt8(offset++);
+                buf.readUInt8(offset++);
+                buf.readUInt8(offset++);
+
                 const sizecode = readInt();
-                offset += sizecode * 4;
-                
+                offset += sizecode * instructionSize;
+
                 const sizek = readInt();
                 for (let i = 0; i < sizek; i++) {
-                    const type = readByte();
+                    const type = buf.readUInt8(offset++);
                     if (type === 4) {
-                        const sBuf = readString();
-                        if (sBuf) strings.push(sBuf);
+                        const s = readString();
+                        if (s) strings.push(s);
                     } else if (type === 3) {
-                        offset += 8;
+                        offset += numberSize;
                     } else if (type === 1) {
                         offset += 1;
+                    } else if (type === 0) {
+                    } else {
+                        throw new Error("Unknown constant type");
                     }
                 }
-                
+
                 const sizep = readInt();
                 for (let i = 0; i < sizep; i++) {
                     parseFunction();
                 }
-                
+
                 const sizelineinfo = readInt();
-                offset += sizelineinfo * 4;
-                
+                offset += sizelineinfo * intSize;
+
                 const sizelocvars = readInt();
                 for (let i = 0; i < sizelocvars; i++) {
                     readString();
                     readInt();
                     readInt();
                 }
-                
+
                 const sizeupvalues = readInt();
                 for (let i = 0; i < sizeupvalues; i++) {
                     readString();
@@ -149,33 +178,74 @@ class MoonsecBridge {
             };
             
             parseFunction();
+        } catch (e) {}
+        return strings;
+    }
 
-            for (const strBuf of strings) {
-                const utf8Str = strBuf.toString('utf8');
-                const win1256Str = new TextDecoder('windows-1256').decode(strBuf);
+    static fixEncoding(code, luacPath) {
+        let fixedCode = code;
+        try {
+            const rawStrings = MoonsecBridge.extractLuacStrings(luacPath);
+            const decodedStrings = [];
+            for (const buf of rawStrings) {
+                const utf8 = buf.toString('utf8');
+                const win = new TextDecoder('windows-1256').decode(buf);
                 
-                let correctStr = null;
-                if (utf8Str.includes('إ') || utf8Str.includes('ا') || utf8Str.includes('م') || utf8Str.includes('د')) {
-                    correctStr = utf8Str;
-                } else if (win1256Str.includes('إ') || win1256Str.includes('ا') || win1256Str.includes('م') || win1256Str.includes('د')) {
-                    correctStr = win1256Str;
-                }
-
-                if (correctStr && correctStr.length > 1) {
-                    const rest = correctStr.substring(1);
-                    const corrupted1 = '\uFFFD' + rest;
-                    const corrupted2 = 'ï؟½' + rest;
-                    
-                    if (fixedCode.includes(corrupted1)) {
-                        fixedCode = fixedCode.split(corrupted1).join(correctStr);
-                    }
-                    if (fixedCode.includes(corrupted2)) {
-                        fixedCode = fixedCode.split(corrupted2).join(correctStr);
-                    }
+                if (utf8.includes('�')) {
+                    if (!win.includes('�')) decodedStrings.push(win);
+                    else decodedStrings.push(utf8);
+                } else {
+                    decodedStrings.push(utf8);
                 }
             }
+
+            const codeStringRegex = /(["'])((?:\\.|(?!\1).)*)\1/g;
+            fixedCode = fixedCode.replace(codeStringRegex, (match, quote, content) => {
+                if (!content.includes('�') && !content.includes('ï؟½') && !content.includes('?')) {
+                    return match;
+                }
+
+                let bestMatch = null;
+                let maxScore = -1;
+
+                for (const correct of decodedStrings) {
+                    if (correct.length < 2) continue;
+                    
+                    let score = 0;
+                    if (correct[0] === content[0]) score += 10;
+                    
+                    let suffixLen = 0;
+                    while (suffixLen < correct.length && suffixLen < content.length && correct[correct.length - 1 - suffixLen] === content[content.length - 1 - suffixLen]) {
+                        suffixLen++;
+                    }
+                    score += suffixLen * 5;
+
+                    let prefixLen = 0;
+                    while (prefixLen < correct.length && prefixLen < content.length && correct[prefixLen] === content[prefixLen]) {
+                        prefixLen++;
+                    }
+                    score += prefixLen * 5;
+
+                    const setA = new Set(correct.split(''));
+                    let commonChars = 0;
+                    for (const c of content) {
+                        if (setA.has(c)) commonChars++;
+                    }
+                    score += commonChars;
+
+                    if (score > maxScore) {
+                        maxScore = score;
+                        bestMatch = correct;
+                    }
+                }
+
+                if (bestMatch && maxScore > 10) {
+                    return quote + bestMatch + quote;
+                }
+                return match;
+            });
+
         } catch (e) {}
-        
         return fixedCode;
     }
 
