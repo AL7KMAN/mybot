@@ -10,7 +10,7 @@ class MoonsecBridge {
             if (!decompileResult.isBytecode) {
                 try {
                     decompileResult.text = MoonsecBridge.inferVariableNames(decompileResult.text);
-                    decompileResult.text = MoonsecBridge.fixArabic(decompileResult.text);
+                    decompileResult.text = MoonsecBridge.fixEncoding(decompileResult.text, dllResult.luacFile);
                 } catch (e) {}
                 return decompileResult;
             }
@@ -85,32 +85,91 @@ class MoonsecBridge {
         return { text: finalCode, urls: uniqueUrls, decompiler: source };
     }
 
-    static fixArabic(code) {
-        let fixed = code;
+    static fixEncoding(code, luacPath) {
+        let fixedCode = code;
+        try {
+            const buffer = fs.readFileSync(luacPath);
+            let offset = 12; 
+            offset += 1; 
+            
+            const rawStrings = [];
+            
+            const readInt = () => { const v = buffer.readInt32LE(offset); offset += 4; return v; };
+            const readByte = () => { return buffer[offset++]; };
+            const readString = () => {
+                const size = readInt();
+                if (size === 0) return null;
+                const data = buffer.subarray(offset, offset + size - 1); 
+                offset += size;
+                return data;
+            };
+
+            const parseFunction = () => {
+                readString(); 
+                readInt(); 
+                readInt(); 
+                readByte(); 
+                readByte(); 
+                readByte(); 
+                readByte(); 
+                
+                const sizecode = readInt();
+                offset += sizecode * 4; 
+                
+                const sizek = readInt();
+                for (let i = 0; i < sizek; i++) {
+                    const type = readByte();
+                    if (type === 4) { 
+                        const s = readString();
+                        if (s) rawStrings.push(s);
+                    } else if (type === 3) { 
+                        offset += 8; 
+                    } else if (type === 1) { 
+                        offset += 1; 
+                    }
+                }
+                
+                const sizep = readInt();
+                for (let i = 0; i < sizep; i++) {
+                    parseFunction();
+                }
+                
+                const sizelineinfo = readInt();
+                offset += sizelineinfo * 4;
+                
+                const sizelocvars = readInt();
+                for (let i = 0; i < sizelocvars; i++) {
+                    readString(); 
+                    readInt(); 
+                    readInt(); 
+                }
+                
+                const sizeupvalues = readInt();
+                for (let i = 0; i < sizeupvalues; i++) {
+                    readString();
+                }
+            };
+            
+            parseFunction();
+
+            for (const rawBuf of rawStrings) {
+                const corrupted = new TextDecoder('windows-1256').decode(rawBuf);
+                const correctUtf8 = new TextDecoder('utf-8').decode(rawBuf);
+                
+                if (!correctUtf8.includes('�')) {
+                    if (fixedCode.includes(corrupted)) {
+                        fixedCode = fixedCode.split(corrupted).join(correctUtf8);
+                    }
+                } else {
+                    const corruptedUtf8 = rawBuf.toString('utf8');
+                    if (fixedCode.includes(corruptedUtf8)) {
+                        fixedCode = fixedCode.split(corruptedUtf8).join(corrupted);
+                    }
+                }
+            }
+        } catch (e) {}
         
-        const dictionary = {
-            'ï؟½ططھط³ط§ط¨ ط§ظ„ظ†ظ‚ط§ط·': 'إحتساب النقاط',
-            'ï؟½ط¯طھظƒ ط¨ط§ظ„ط³ظٹط±ظپط±': 'مدتك بالسيرفر',
-            'ï؟½ظƒطھط¨ ط¥ط³ظ… ظ„ط§ط¹ط¨': 'اكتب إسم لاعب',
-            'ï؟½ط¯ط£': 'بدأ',
-            'ï؟½ط®ظˆظ„': 'دخول',
-            'ط®ط±ظˆط¬': 'خروج',
-            'ظ…ط¯ط©': 'مدة',
-            'ï؟½ط¯ط© ط¨ظ‚ط§ط¦ظƒ': 'مدة بقائك',
-            'ï؟½ï؟½ طھظ… ط§ظ„ظ†ط³ط®': 'تم النسخ',
-            'ï؟½ظ… ظ†ط³ط® ط§ظ„ظ…ط¹ظ„ظˆظ…ط§طھ طھظ„ظ‚ط§ط¦ظٹظ‹ط§ ط¥ظ„ظ‰ ط§ظ„طط§ظپط¸ط©.': 'تم نسخ المعلومات تلقائيًا إلى الحافظة.',
-            'ï؟½ط³ط® ط؛ظٹط± ظ…ط¯ط¹ظˆظ…': 'نسخ غير مدعوم',
-            'ï؟½ظ‡ط§ط²ظƒ ظ„ط§ ظٹط¯ط¹ظ… ط§ظ„ظ†ط³ط® ط§ظ„طھظ„ظ‚ط§ط¦ظٹ': 'جهازك لا يدعم النسخ التلقائي',
-            'ï؟½ط·ط£ ظپظٹ ط§ظ„ظ†ط³ط®': 'خطأ في النسخ',
-            'ï؟½ط¯ط« ط®ط·ط£ ط؛ظٹط± ظ…ط¹ط±ظˆظپ': 'حدث خطأ غير معروف',
-            'ï؟½ط¯ط© ط¨ظ‚ط§ط¦ظƒ: ': 'مدة بقائك: '
-        };
-
-        for (const [corrupted, correct] of Object.entries(dictionary)) {
-            fixed = fixed.split(corrupted).join(correct);
-        }
-
-        return fixed;
+        return fixedCode;
     }
 
     static inferVariableNames(code) {
