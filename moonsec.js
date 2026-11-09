@@ -67,6 +67,11 @@ class MoonsecBridge {
     static formatOutput(code, source) {
         let finalCode = code;
         
+        try {
+            const decoder = new TextDecoder('windows-1256');
+            finalCode = decoder.decode(Buffer.from(finalCode, 'binary'));
+        } catch (e) {}
+
         finalCode = finalCode.replace(/^-- file:.*$/gm, '');
         finalCode = finalCode.replace(/^-- dialect:.*$/gm, '');
         finalCode = finalCode.replace(/^-- encoding:.*$/gm, '');
@@ -92,18 +97,27 @@ class MoonsecBridge {
         let match;
         while ((match = servRegex.exec(code)) !== null) {
             const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-            map.set(match[1], cleanName + "_Service");
+            const newName = cleanName + "_Service";
+            if (!Array.from(map.values()).includes(newName)) {
+                map.set(match[1], newName);
+            }
         }
 
         const instRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[\.\:]new\s*\(\s*["']([^"']+)["']/g;
         while ((match = instRegex.exec(code)) !== null) {
             const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-            map.set(match[1], cleanName + "_Inst");
+            const newName = cleanName + "_Inst";
+            if (!Array.from(map.values()).includes(newName)) {
+                map.set(match[1], newName);
+            }
         }
 
         const lpRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\.LocalPlayer/g;
         while ((match = lpRegex.exec(code)) !== null) {
-            map.set(match[1], "LocalPlayer");
+            const newName = "LocalPlayer";
+            if (!Array.from(map.values()).includes(newName)) {
+                map.set(match[1], newName);
+            }
         }
 
         const sortedKeys = Array.from(map.keys()).sort((a, b) => b.length - a.length);
@@ -121,7 +135,8 @@ class MoonsecBridge {
             try {
                 const proc = spawn(cmd, args, { timeout: timeoutMs, killSignal: 'SIGKILL' });
                 let out = "", err = "";
-                proc.stdout.on("data", (data) => { out += data.toString(); });
+                
+                proc.stdout.on("data", (data) => { out += data.toString('binary'); });
                 proc.stderr.on("data", (data) => { err += data.toString(); });
                 
                 proc.on("error", (e) => resolve({ success: false, out: "", error: e.message }));
