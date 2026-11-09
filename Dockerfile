@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y \
 
 RUN luarocks install bit32 || true
 
-RUN wget https://dot.net -O dotnet-install.sh \
+RUN wget https://githubusercontent.com -O dotnet-install.sh \
+    && chmod +x dotnet-install.sh \
     && sed -i 's/\r$//' dotnet-install.sh \
     && bash dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet \
