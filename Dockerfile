@@ -5,16 +5,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     curl git python3.12 python3-pip python3.12-venv \
     wget default-jdk lua5.1 luarocks unzip build-essential ant \
-    nodejs npm software-properties-common \
+    nodejs npm software-properties-common rustc cargo \
     && rm -rf /var/lib/apt/lists/*
 
 RUN luarocks install bit32 || true
 
 RUN curl -sSL https://githubusercontent.com | bash -s -- --version 9.0.100 --install-dir /usr/share/dotnet \
     && ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 
