@@ -9,8 +9,9 @@ class MoonsecBridge {
             const decompileResult = await MoonsecBridge.tryDecompress(dllResult.luacFile);
             if (!decompileResult.isBytecode) {
                 try {
-                    decompileResult.text = MoonsecBridge.inferVariableNames(decompileResult.text);
+                    // نصلح العربي أولاً، وبعدها نرتب المتغيرات
                     decompileResult.text = MoonsecBridge.fixArabicFromLuac(decompileResult.text, dllResult.luacFile);
+                    decompileResult.text = MoonsecBridge.inferVariableNames(decompileResult.text);
                 } catch (e) {}
                 return decompileResult;
             }
@@ -89,106 +90,37 @@ class MoonsecBridge {
         let fixedCode = code;
         try {
             const buf = fs.readFileSync(luacPath);
-            let offset = 0;
-            if (buf.readUInt8(0) !== 0x1b) return fixedCode;
-            if (buf.toString('utf8', 1, 4) !== 'Lua') return fixedCode;
+            const text = buf.toString('binary');
+            const arabicStrings = [];
             
-            offset = 4;
-            const version = buf.readUInt8(offset++);
-            const format = buf.readUInt8(offset++);
-            const endianness = buf.readUInt8(offset++);
-            const intSize = buf.readUInt8(offset++);
-            const sizeTSize = buf.readUInt8(offset++);
-            const instructionSize = buf.readUInt8(offset++);
-            const numberSize = buf.readUInt8(offset++);
-            const integral = buf.readUInt8(offset++);
-            
-            const isLittleEndian = (endianness === 1);
-            
-            const readInt = () => {
-                let v = isLittleEndian ? buf.readInt32LE(offset) : buf.readInt32BE(offset);
-                offset += intSize;
-                return v;
-            };
-            
-            const readSizeT = () => {
-                let v = sizeTSize === 4 ? (isLittleEndian ? buf.readUInt32LE(offset) : buf.readUInt32BE(offset)) : 0;
-                offset += sizeTSize;
-                return v;
-            };
-            
-            const readString = () => {
-                const size = readSizeT();
-                if (size === 0) return null;
-                const strBuf = buf.subarray(offset, offset + size - 1);
-                offset += size;
-                return strBuf;
-            };
-            
-            const strings = [];
-            const parseFunction = () => {
-                readString();
-                readInt();
-                readInt();
-                buf.readUInt8(offset++);
-                buf.readUInt8(offset++);
-                buf.readUInt8(offset++);
-                buf.readUInt8(offset++);
-
-                const sizecode = readInt();
-                offset += sizecode * instructionSize;
-
-                const sizek = readInt();
-                for (let i = 0; i < sizek; i++) {
-                    const type = buf.readUInt8(offset++);
-                    if (type === 4) {
-                        const s = readString();
-                        if (s) strings.push(s);
-                    } else if (type === 3) {
-                        offset += numberSize;
-                    } else if (type === 1) {
-                        offset += 1;
-                    }
-                }
-
-                const sizep = readInt();
-                for (let i = 0; i < sizep; i++) {
-                    parseFunction();
-                }
-
-                const sizelineinfo = readInt();
-                offset += sizelineinfo * intSize;
-
-                const sizelocvars = readInt();
-                for (let i = 0; i < sizelocvars; i++) {
-                    readString();
-                    readInt();
-                    readInt();
-                }
-
-                const sizeupvalues = readInt();
-                for (let i = 0; i < sizeupvalues; i++) {
-                    readString();
-                }
-            };
-            
-            parseFunction();
-
-            for (const strBuf of strings) {
-                const decoded = new TextDecoder('windows-1256').decode(strBuf);
+            // نبحث عن أي مقاطع تحتوي على حروف عربية داخل ملف البايت كود
+            const regex = /[\x20-\x7E\xC0-\xFF]{3,}/g;
+            let match;
+            while ((match = regex.exec(text)) !== null) {
+                const decoded = new TextDecoder('windows-1256').decode(Buffer.from(match[0], 'binary'));
                 if (/[\u0600-\u06FF]/.test(decoded)) {
-                    const firstChar = decoded[0];
-                    const rest = decoded.substring(1);
-                    
-                    const bad1 = `\uFFFD${rest}`;
-                    const bad2 = `ï؟½${rest}`;
-                    const bad3 = `ï؟½ط${rest}`;
-                    
-                    if (fixedCode.includes(bad1)) fixedCode = fixedCode.split(bad1).join(decoded);
-                    if (fixedCode.includes(bad2)) fixedCode = fixedCode.split(bad2).join(decoded);
-                    if (fixedCode.includes(bad3)) fixedCode = fixedCode.split(bad3).join(decoded);
+                    arabicStrings.push(decoded);
                 }
             }
+            
+            const uniqueStrings = [...new Set(arabicStrings)];
+            
+            // نبحث في الكود المفكوك عن النصوص المخربة ونستبدلها بالنص الصحيح
+            fixedCode = fixedCode.replace(/"([^"]+)"/g, (m, content) => {
+                if (!content.includes('\uFFFD') && !content.includes('ï؟½') && !content.includes('�')) {
+                    return m;
+                }
+                
+                let cleanContent = content.replace(/[\uFFFDï؟½�]/g, '').trim();
+                if (cleanContent.length < 2) return m;
+                
+                for (const correct of uniqueStrings) {
+                    if (correct.includes(cleanContent)) {
+                        return `"${correct}"`;
+                    }
+                }
+                return m;
+            });
         } catch (e) {}
         return fixedCode;
     }
@@ -201,19 +133,18 @@ class MoonsecBridge {
         let match;
         while ((match = servRegex.exec(code)) !== null) {
             const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-            const newName = cleanName + "_Service";
-            if (!Array.from(map.values()).includes(newName)) {
-                map.set(match[1], newName);
-            }
+            map.set(match[1], cleanName + "_Service");
         }
 
         const instRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[\.\:]new\s*\(\s*["']([^"']+)["']/g;
         while ((match = instRegex.exec(code)) !== null) {
             const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-            const newName = cleanName + "_Inst";
-            if (!Array.from(map.values()).includes(newName)) {
-                map.set(match[1], newName);
-            }
+            map.set(match[1], cleanName + "_Inst");
+        }
+
+        const lpRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\.LocalPlayer/g;
+        while ((match = lpRegex.exec(code)) !== null) {
+            map.set(match[1], "LocalPlayer");
         }
 
         const sortedKeys = Array.from(map.keys()).sort((a, b) => b.length - a.length);
