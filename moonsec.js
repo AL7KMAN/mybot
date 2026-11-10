@@ -8,22 +8,31 @@ class LuaLexer {
         this.pos = 0;
         this.len = code.length;
         this.tokens = [];
-        this.keywords = new Set([
-            'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
-            'function', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat',
-            'return', 'then', 'true', 'until', 'while'
-        ]);
+        this.line = 1;
+        this.column = 1;
+        this.keywords = new Set(['and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function', 'if', 'in', 'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true', 'until', 'while']);
+        this.symbols = new Set(['+', '-', '*', '/', '%', '^', '#', '==', '~=', '<=', '>=', '<', '>', '=', '(', ')', '{', '}', '[', ']', ';', ':', ',', '.', '..', '...', '//', '::']);
     }
     peek(offset = 0) { return this.code[this.pos + offset]; }
-    advance() { return this.code[this.pos++]; }
+    advance() {
+        const char = this.code[this.pos++];
+        if (char === '\n') { this.line++; this.column = 1; } 
+        else { this.column++; }
+        return char;
+    }
     match(str) {
-        if (this.code.startsWith(str, this.pos)) { this.pos += str.length; return true; }
+        if (this.code.startsWith(str, this.pos)) {
+            for (let i = 0; i < str.length; i++) this.advance();
+            return true;
+        }
         return false;
     }
+    error(msg) { throw new Error(`Lexer Error at ${this.line}:${this.column} - ${msg}`); }
     tokenize() {
         while (this.pos < this.len) {
             let char = this.peek();
             if (/\s/.test(char)) { this.advance(); continue; }
+            if (char === '#' && this.pos === 0) { while (this.pos < this.len && this.peek() !== '\n') this.advance(); continue; }
             if (char === '-' && this.peek(1) === '-') { this.readComment(); continue; }
             if (char === '"' || char === "'") { this.readString(char); continue; }
             if (char === '[') {
@@ -35,7 +44,7 @@ class LuaLexer {
             if (/[a-zA-Z_]/.test(char)) { this.readIdentifier(); continue; }
             this.readSymbol();
         }
-        this.tokens.push({ type: 'EOF', value: null });
+        this.tokens.push({ type: 'EOF', value: null, line: this.line, column: this.column });
         return this.tokens;
     }
     readComment() {
@@ -46,36 +55,34 @@ class LuaLexer {
             if (this.code[p] === '[') {
                 const closeStr = ']' + '='.repeat(eq) + ']';
                 const end = this.code.indexOf(closeStr, p + 1);
-                if (end !== -1) { this.pos = end + closeStr.length; return; }
+                if (end !== -1) { while (this.pos <= end + closeStr.length) this.advance(); return; }
             }
         }
         while (this.pos < this.len && this.peek() !== '\n') this.advance();
     }
     readString(quote) {
         this.advance();
-        let start = this.pos;
+        let start = this.pos, startLine = this.line, startCol = this.column;
         while (this.pos < this.len) {
             let char = this.advance();
             if (char === '\\') { this.advance(); continue; }
             if (char === quote) break;
-            if (char === '\n') throw new Error("Unterminated string");
+            if (char === '\n') this.error("Unterminated string");
         }
-        let raw = this.code.slice(start, this.pos - 1);
-        this.tokens.push({ type: 'String', value: raw, quote: quote });
+        this.tokens.push({ type: 'String', value: this.code.slice(start, this.pos - 1), quote: quote, line: startLine, column: startCol });
     }
     readLongString(eq) {
-        const open = '[' + '='.repeat(eq) + '[';
-        const close = ']' + '='.repeat(eq) + ']';
-        this.pos += open.length;
-        let start = this.pos;
-        const end = this.code.indexOf(close, this.pos);
-        if (end === -1) throw new Error("Unterminated long string");
-        let raw = this.code.slice(start, end);
-        this.pos = end + close.length;
-        this.tokens.push({ type: 'String', value: raw, quote: open, isLong: true });
+        const open = '[' + '='.repeat(eq) + '[', close = ']' + '='.repeat(eq) + ']';
+        let startLine = this.line, startCol = this.column;
+        for (let i = 0; i < open.length; i++) this.advance();
+        let start = this.pos, end = this.code.indexOf(close, this.pos);
+        if (end === -1) this.error("Unterminated long string");
+        let value = this.code.slice(start, end);
+        while (this.pos <= end + close.length) this.advance();
+        this.tokens.push({ type: 'String', value: value, quote: open, isLong: true, line: startLine, column: startCol });
     }
     readNumber() {
-        let start = this.pos;
+        let start = this.pos, startLine = this.line, startCol = this.column;
         if (this.peek() === '0' && (this.peek(1) === 'x' || this.peek(1) === 'X')) {
             this.advance(); this.advance();
             while (/[0-9a-fA-F]/.test(this.peek())) this.advance();
@@ -87,33 +94,30 @@ class LuaLexer {
                 while (/[0-9]/.test(this.peek())) this.advance();
             }
         }
-        this.tokens.push({ type: 'Number', value: this.code.slice(start, this.pos) });
+        this.tokens.push({ type: 'Number', value: this.code.slice(start, this.pos), line: startLine, column: startCol });
     }
     readIdentifier() {
-        let start = this.pos;
+        let start = this.pos, startLine = this.line, startCol = this.column;
         while (/[a-zA-Z0-9_]/.test(this.peek())) this.advance();
         let word = this.code.slice(start, this.pos);
-        if (this.keywords.has(word)) this.tokens.push({ type: 'Keyword', value: word });
-        else this.tokens.push({ type: 'Identifier', value: word });
+        this.tokens.push({ type: this.keywords.has(word) ? 'Keyword' : 'Identifier', value: word, line: startLine, column: startCol });
     }
     readSymbol() {
-        const threeChar = this.code.slice(this.pos, this.pos + 3);
-        if (threeChar === '...') { this.pos += 3; this.tokens.push({ type: 'Symbol', value: '...' }); return; }
+        let startLine = this.line, startCol = this.column;
+        if (this.match('...')) { this.tokens.push({ type: 'Symbol', value: '...', line: startLine, column: startCol }); return; }
         const twoChar = this.code.slice(this.pos, this.pos + 2);
         if (['==', '~=', '<=', '>=', '..', '//', '::'].includes(twoChar)) {
-            this.pos += 2; this.tokens.push({ type: 'Symbol', value: twoChar }); return;
+            this.advance(); this.advance();
+            this.tokens.push({ type: 'Symbol', value: twoChar, line: startLine, column: startCol }); return;
         }
         const char = this.advance();
-        this.tokens.push({ type: 'Symbol', value: char });
+        this.tokens.push({ type: 'Symbol', value: char, line: startLine, column: startCol });
     }
 }
 
 class LuaParser {
-    constructor(tokens) {
-        this.tokens = tokens;
-        this.pos = 0;
-    }
-    peek(offset = 0) { return this.tokens[this.pos + offset] || { type: 'EOF', value: null }; }
+    constructor(tokens) { this.tokens = tokens; this.pos = 0; }
+    peek(offset = 0) { return this.tokens[this.pos + offset] || { type: 'EOF', value: null, line: 0, column: 0 }; }
     advance() { return this.tokens[this.pos++]; }
     match(type, value) {
         const t = this.peek();
@@ -122,14 +126,10 @@ class LuaParser {
     }
     expect(type, value) {
         const t = this.match(type, value);
-        if (!t) throw new Error(`Expected ${type} ${value || ''} at token ${this.pos}, got ${this.peek().type} ${this.peek().value}`);
+        if (!t) throw new Error(`Parser Error at ${this.peek().line}:${this.peek().column} - Expected ${type} ${value || ''}`);
         return t;
     }
-    parse() {
-        const body = this.parseBlock();
-        this.expect('EOF');
-        return { type: 'Chunk', body };
-    }
+    parse() { const body = this.parseBlock(); this.expect('EOF'); return { type: 'Chunk', body }; }
     parseBlock() {
         const statements = [];
         const terminators = new Set(['end', 'else', 'elseif', 'until', 'EOF']);
@@ -151,43 +151,37 @@ class LuaParser {
                 case 'repeat': return this.parseRepeat();
                 case 'do': return this.parseDo();
                 case 'return': return this.parseReturn();
-                case 'break': this.advance(); return { type: 'BreakStatement' };
+                case 'break': this.advance(); return { type: 'BreakStatement', line: t.line };
             }
         }
         return this.parseAssignmentOrCall();
     }
     parseLocal() {
-        this.expect('Keyword', 'local');
+        const t = this.expect('Keyword', 'local');
         if (this.peek().type === 'Keyword' && this.peek().value === 'function') {
             this.advance();
-            const name = this.expect('Identifier').value;
-            const func = this.parseFunctionBody();
-            return { type: 'LocalFunctionStatement', name, func };
+            return { type: 'LocalFunctionStatement', name: this.expect('Identifier').value, func: this.parseFunctionBody(), line: t.line };
         }
         const names = [];
         do { names.push(this.expect('Identifier').value); } while (this.match('Symbol', ','));
         let init = [];
-        if (this.match('Symbol', '=')) { init = this.parseExpressionList(); }
-        return { type: 'LocalStatement', names, init };
+        if (this.match('Symbol', '=')) init = this.parseExpressionList();
+        return { type: 'LocalStatement', names, init, line: t.line };
     }
     parseFunctionStatement() {
-        this.expect('Keyword', 'function');
+        const t = this.expect('Keyword', 'function');
         let name = this.expect('Identifier').value;
-        while (this.match('Symbol', '.')) { name += '.' + this.expect('Identifier').value; }
+        while (this.match('Symbol', '.')) name += '.' + this.expect('Identifier').value;
         let isMethod = false;
         if (this.match('Symbol', ':')) { name += ':' + this.expect('Identifier').value; isMethod = true; }
-        const func = this.parseFunctionBody(isMethod);
-        return { type: 'FunctionStatement', name, func };
+        return { type: 'FunctionStatement', name, func: this.parseFunctionBody(isMethod), line: t.line };
     }
     parseFunctionBody(isMethod = false) {
         this.expect('Symbol', '(');
         const params = [];
         if (isMethod) params.push('self');
         if (this.peek().value !== ')') {
-            do {
-                if (this.peek().value === '...') { this.advance(); params.push('...'); }
-                else params.push(this.expect('Identifier').value);
-            } while (this.match('Symbol', ','));
+            do { params.push(this.peek().value === '...' ? this.advance().value : this.expect('Identifier').value); } while (this.match('Symbol', ','));
         }
         this.expect('Symbol', ')');
         const body = this.parseBlock();
@@ -195,152 +189,131 @@ class LuaParser {
         return { type: 'FunctionExpression', params, body };
     }
     parseIf() {
-        this.expect('Keyword', 'if');
-        const clauses = [];
-        const cond = this.parseExpression();
-        this.expect('Keyword', 'then');
-        const body = this.parseBlock();
-        clauses.push({ cond, body });
+        const t = this.expect('Keyword', 'if');
+        const clauses = [{ cond: this.parseExpression(), body: (this.expect('Keyword', 'then'), this.parseBlock()) }];
         while (this.peek().value === 'elseif') {
             this.advance();
-            const c = this.parseExpression();
-            this.expect('Keyword', 'then');
-            const b = this.parseBlock();
-            clauses.push({ cond: c, body: b });
+            clauses.push({ cond: this.parseExpression(), body: (this.expect('Keyword', 'then'), this.parseBlock()) });
         }
         let elseBody = null;
-        if (this.match('Keyword', 'else')) { elseBody = this.parseBlock(); }
+        if (this.match('Keyword', 'else')) elseBody = this.parseBlock();
         this.expect('Keyword', 'end');
-        return { type: 'IfStatement', clauses, elseBody };
+        return { type: 'IfStatement', clauses, elseBody, line: t.line };
     }
     parseFor() {
-        this.expect('Keyword', 'for');
+        const t = this.expect('Keyword', 'for');
         const name1 = this.expect('Identifier').value;
         if (this.match('Symbol', '=')) {
             const start = this.parseExpression();
             this.expect('Symbol', ',');
             const end = this.parseExpression();
             let step = null;
-            if (this.match('Symbol', ',')) { step = this.parseExpression(); }
+            if (this.match('Symbol', ',')) step = this.parseExpression();
             this.expect('Keyword', 'do');
             const body = this.parseBlock();
             this.expect('Keyword', 'end');
-            return { type: 'NumericForStatement', name: name1, start, end, step, body };
-        } else {
-            const names = [name1];
-            while (this.match('Symbol', ',')) { names.push(this.expect('Identifier').value); }
-            this.expect('Keyword', 'in');
-            const exprs = this.parseExpressionList();
-            this.expect('Keyword', 'do');
-            const body = this.parseBlock();
-            this.expect('Keyword', 'end');
-            return { type: 'GenericForStatement', names, exprs, body };
+            return { type: 'NumericForStatement', name: name1, start, end, step, body, line: t.line };
         }
+        const names = [name1];
+        while (this.match('Symbol', ',')) names.push(this.expect('Identifier').value);
+        this.expect('Keyword', 'in');
+        const exprs = this.parseExpressionList();
+        this.expect('Keyword', 'do');
+        const body = this.parseBlock();
+        this.expect('Keyword', 'end');
+        return { type: 'GenericForStatement', names, exprs, body, line: t.line };
     }
     parseWhile() {
-        this.expect('Keyword', 'while');
+        const t = this.expect('Keyword', 'while');
         const cond = this.parseExpression();
         this.expect('Keyword', 'do');
         const body = this.parseBlock();
         this.expect('Keyword', 'end');
-        return { type: 'WhileStatement', cond, body };
+        return { type: 'WhileStatement', cond, body, line: t.line };
     }
     parseRepeat() {
-        this.expect('Keyword', 'repeat');
+        const t = this.expect('Keyword', 'repeat');
         const body = this.parseBlock();
         this.expect('Keyword', 'until');
-        const cond = this.parseExpression();
-        return { type: 'RepeatStatement', body, cond };
+        return { type: 'RepeatStatement', body, cond: this.parseExpression(), line: t.line };
     }
     parseDo() {
-        this.expect('Keyword', 'do');
+        const t = this.expect('Keyword', 'do');
         const body = this.parseBlock();
         this.expect('Keyword', 'end');
-        return { type: 'DoStatement', body };
+        return { type: 'DoStatement', body, line: t.line };
     }
     parseReturn() {
-        this.expect('Keyword', 'return');
+        const t = this.expect('Keyword', 'return');
         let exprs = [];
-        if (this.peek().type !== 'EOF' && this.peek().value !== 'end' && this.peek().value !== 'else' && this.peek().value !== 'elseif' && this.peek().value !== 'until' && this.peek().value !== ';') {
-            exprs = this.parseExpressionList();
-        }
+        const next = this.peek();
+        if (next.type !== 'EOF' && !['end', 'else', 'elseif', 'until', ';'].includes(next.value)) exprs = this.parseExpressionList();
         this.match('Symbol', ';');
-        return { type: 'ReturnStatement', exprs };
+        return { type: 'ReturnStatement', exprs, line: t.line };
     }
     parseAssignmentOrCall() {
+        const t = this.peek();
         const expr = this.parsePrimaryExpression();
         if (this.peek().type === 'Symbol' && (this.peek().value === '=' || this.peek().value === ',')) {
             const targets = [expr];
-            while (this.match('Symbol', ',')) { targets.push(this.parsePrimaryExpression()); }
+            while (this.match('Symbol', ',')) targets.push(this.parsePrimaryExpression());
             this.expect('Symbol', '=');
-            const values = this.parseExpressionList();
-            return { type: 'AssignmentStatement', targets, values };
+            return { type: 'AssignmentStatement', targets, values: this.parseExpressionList(), line: t.line };
         }
-        if (expr.type === 'CallExpression' || expr.type === 'MethodCallExpression') {
-            return { type: 'CallStatement', expression: expr };
-        }
-        throw new Error("Syntax error: expected assignment or function call");
+        return { type: 'CallStatement', expression: expr, line: t.line };
     }
     parseExpressionList() {
         const exprs = [this.parseExpression()];
-        while (this.match('Symbol', ',')) { exprs.push(this.parseExpression()); }
+        while (this.match('Symbol', ',')) exprs.push(this.parseExpression());
         return exprs;
     }
-    parseExpression() {
-        return this.parseOr();
-    }
+    parseExpression() { return this.parseOr(); }
     parseOr() {
         let expr = this.parseAnd();
-        while (this.match('Keyword', 'or')) { expr = { type: 'BinaryExpression', operator: 'or', left: expr, right: this.parseAnd() }; }
+        while (this.match('Keyword', 'or')) expr = { type: 'BinaryExpression', operator: 'or', left: expr, right: this.parseAnd() };
         return expr;
     }
     parseAnd() {
         let expr = this.parseComparison();
-        while (this.match('Keyword', 'and')) { expr = { type: 'BinaryExpression', operator: 'and', left: expr, right: this.parseComparison() }; }
+        while (this.match('Keyword', 'and')) expr = { type: 'BinaryExpression', operator: 'and', left: expr, right: this.parseComparison() };
         return expr;
     }
     parseComparison() {
         let expr = this.parseConcat();
         while (this.peek().type === 'Symbol' && ['<', '>', '<=', '>=', '~=', '=='].includes(this.peek().value)) {
-            const op = this.advance().value;
-            expr = { type: 'BinaryExpression', operator: op, left: expr, right: this.parseConcat() };
+            expr = { type: 'BinaryExpression', operator: this.advance().value, left: expr, right: this.parseConcat() };
         }
         return expr;
     }
     parseConcat() {
         let expr = this.parseAdd();
-        while (this.match('Symbol', '..')) { expr = { type: 'BinaryExpression', operator: '..', left: expr, right: this.parseAdd() }; }
+        while (this.match('Symbol', '..')) expr = { type: 'BinaryExpression', operator: '..', left: expr, right: this.parseAdd() };
         return expr;
     }
     parseAdd() {
         let expr = this.parseMul();
         while (this.peek().type === 'Symbol' && ['+', '-'].includes(this.peek().value)) {
-            const op = this.advance().value;
-            expr = { type: 'BinaryExpression', operator: op, left: expr, right: this.parseMul() };
+            expr = { type: 'BinaryExpression', operator: this.advance().value, left: expr, right: this.parseMul() };
         }
         return expr;
     }
     parseMul() {
         let expr = this.parseUnary();
         while (this.peek().type === 'Symbol' && ['*', '/', '%', '//'].includes(this.peek().value)) {
-            const op = this.advance().value;
-            expr = { type: 'BinaryExpression', operator: op, left: expr, right: this.parseUnary() };
+            expr = { type: 'BinaryExpression', operator: this.advance().value, left: expr, right: this.parseUnary() };
         }
         return expr;
     }
     parseUnary() {
-        if (this.peek().type === 'Keyword' && this.peek().value === 'not') {
-            this.advance(); return { type: 'UnaryExpression', operator: 'not', argument: this.parseUnary() };
-        }
+        if (this.match('Keyword', 'not')) return { type: 'UnaryExpression', operator: 'not', argument: this.parseUnary() };
         if (this.peek().type === 'Symbol' && ['-', '#'].includes(this.peek().value)) {
-            const op = this.advance().value;
-            return { type: 'UnaryExpression', operator: op, argument: this.parseUnary() };
+            return { type: 'UnaryExpression', operator: this.advance().value, argument: this.parseUnary() };
         }
         return this.parsePower();
     }
     parsePower() {
         let expr = this.parsePrimaryExpression();
-        if (this.match('Symbol', '^')) { expr = { type: 'BinaryExpression', operator: '^', left: expr, right: this.parseUnary() }; }
+        if (this.match('Symbol', '^')) expr = { type: 'BinaryExpression', operator: '^', left: expr, right: this.parseUnary() };
         return expr;
     }
     parsePrimaryExpression() {
@@ -352,11 +325,7 @@ class LuaParser {
         }
         if (t.type === 'Number') { this.advance(); return { type: 'NumberLiteral', value: t.value }; }
         if (t.type === 'String') { this.advance(); return { type: 'StringLiteral', value: t.value, quote: t.quote, isLong: t.isLong }; }
-        if (t.type === 'Identifier') {
-            this.advance();
-            let expr = { type: 'Identifier', name: t.value };
-            return this.parseSuffixes(expr);
-        }
+        if (t.type === 'Identifier') { this.advance(); return this.parseSuffixes({ type: 'Identifier', name: t.value }); }
         if (t.type === 'Symbol') {
             if (t.value === '(') {
                 this.advance();
@@ -364,65 +333,51 @@ class LuaParser {
                 this.expect('Symbol', ')');
                 return this.parseSuffixes(expr);
             }
-            if (t.value === '{') { return this.parseTableConstructor(); }
+            if (t.value === '{') return this.parseTableConstructor();
             if (t.value === '...') { this.advance(); return { type: 'VarargLiteral' }; }
         }
-        throw new Error(`Unexpected token in expression: ${t.type} ${t.value}`);
+        throw new Error(`Parser Error at ${t.line}:${t.column} - Unexpected token: ${t.type} ${t.value}`);
     }
     parseSuffixes(expr) {
         while (true) {
-            if (this.match('Symbol', '.')) {
-                const name = this.expect('Identifier').value;
-                expr = { type: 'MemberExpression', object: expr, property: name };
-            } else if (this.match('Symbol', '[')) {
+            if (this.match('Symbol', '.')) expr = { type: 'MemberExpression', object: expr, property: this.expect('Identifier').value };
+            else if (this.match('Symbol', '[')) {
                 const prop = this.parseExpression();
                 this.expect('Symbol', ']');
                 expr = { type: 'IndexExpression', object: expr, index: prop };
             } else if (this.match('Symbol', ':')) {
-                const method = this.expect('Identifier').value;
-                const args = this.parseCallArguments();
-                expr = { type: 'MethodCallExpression', object: expr, method, args };
+                expr = { type: 'MethodCallExpression', object: expr, method: this.expect('Identifier').value, args: this.parseCallArguments() };
             } else if (this.peek().value === '(' || this.peek().value === '{' || this.peek().type === 'String') {
-                const args = this.parseCallArguments();
-                expr = { type: 'CallExpression', base: expr, args };
-            } else {
-                break;
-            }
+                expr = { type: 'CallExpression', base: expr, args: this.parseCallArguments() };
+            } else break;
         }
         return expr;
     }
     parseCallArguments() {
         if (this.match('Symbol', '(')) {
             const args = [];
-            if (this.peek().value !== ')') {
-                do { args.push(this.parseExpression()); } while (this.match('Symbol', ','));
-            }
+            if (this.peek().value !== ')') { do { args.push(this.parseExpression()); } while (this.match('Symbol', ',')); }
             this.expect('Symbol', ')');
             return args;
         }
-        if (this.peek().value === '{') { return [this.parseTableConstructor()]; }
-        if (this.peek().type === 'String') { return [this.parsePrimaryExpression()]; }
-        throw new Error("Expected call arguments");
+        if (this.peek().value === '{') return [this.parseTableConstructor()];
+        if (this.peek().type === 'String') return [this.parsePrimaryExpression()];
+        throw new Error("Parser Error - Expected call arguments");
     }
     parseTableConstructor() {
         this.expect('Symbol', '{');
         const fields = [];
         while (this.peek().value !== '}') {
-            if (this.peek().value === '[') {
-                this.advance();
+            if (this.match('Symbol', '[')) {
                 const key = this.parseExpression();
                 this.expect('Symbol', ']');
                 this.expect('Symbol', '=');
-                const val = this.parseExpression();
-                fields.push({ type: 'TableKey', key, value: val });
+                fields.push({ type: 'TableKey', key, value: this.parseExpression() });
             } else if (this.peek().type === 'Identifier' && this.peek(1).value === '=') {
                 const key = this.advance().value;
                 this.advance();
-                const val = this.parseExpression();
-                fields.push({ type: 'TableKeyString', key, value: val });
-            } else {
-                fields.push({ type: 'TableValue', value: this.parseExpression() });
-            }
+                fields.push({ type: 'TableKeyString', key, value: this.parseExpression() });
+            } else fields.push({ type: 'TableValue', value: this.parseExpression() });
             if (!this.match('Symbol', ',') && !this.match('Symbol', ';')) break;
         }
         this.expect('Symbol', '}');
@@ -431,30 +386,43 @@ class LuaParser {
 }
 
 class LuaTransformer {
-    constructor() { this.scopes = [new Map()]; this.counters = { var: 1, table: 1, func: 1, param: 1, global: 1 }; }
+    constructor() {
+        this.scopes = [new Map()];
+        this.counters = { var: 1, table: 1, func: 1, param: 1, global: 1, index: 1, value: 1 };
+        this.typeInference = new Map();
+    }
     enterScope() { this.scopes.push(new Map()); }
     exitScope() { this.scopes.pop(); }
-    declare(name, type) {
-        let newName = '';
-        if (type === 'service') newName = name + '_Service';
-        else if (type === 'instance') newName = name + '_Instance';
-        else if (type === 'function') newName = 'Function_' + this.counters.func++;
-        else if (type === 'table') newName = 'Table_' + this.counters.table++;
-        else if (type === 'param') newName = 'Param_' + this.counters.param++;
-        else if (type === 'global') newName = 'Global_' + this.counters.global++;
-        else newName = 'Var_' + this.counters.var++;
-        this.scopes[this.scopes.length - 1].set(name, newName);
-        return newName;
+    declare(name, newNameBase) {
+        let finalName = newNameBase, counter = 1;
+        const currentScope = this.scopes[this.scopes.length - 1];
+        while (Array.from(currentScope.values()).includes(finalName) || Array.from(this.scopes[0].values()).includes(finalName)) {
+            finalName = newNameBase + '_' + counter++;
+        }
+        currentScope.set(name, finalName);
+        return finalName;
     }
     lookup(name) {
-        for (let i = this.scopes.length - 1; i >= 0; i--) {
-            if (this.scopes[i].has(name)) return this.scopes[i].get(name);
-        }
+        for (let i = this.scopes.length - 1; i >= 0; i--) if (this.scopes[i].has(name)) return this.scopes[i].get(name);
         return null;
     }
-    transform(ast) {
-        this.transformChunk(ast);
-        return ast;
+    transform(ast) { this.inferTypes(ast); this.transformChunk(ast); return ast; }
+    inferTypes(node) {
+        if (!node || typeof node !== 'object') return;
+        if (node.type === 'LocalStatement' && node.init.length === 1 && node.init[0].type === 'CallExpression') {
+            const call = node.init[0];
+            if (call.base.type === 'MemberExpression' && call.base.object.name === 'game' && call.base.property === 'GetService' && call.args[0]) {
+                this.typeInference.set(node.names[0], { type: 'service', value: call.args[0].value });
+            } else if (call.base.type === 'MemberExpression' && call.base.object.name === 'Instance' && call.base.property === 'new' && call.args[0]) {
+                this.typeInference.set(node.names[0], { type: 'instance', value: call.args[0].value });
+            }
+        }
+        for (let key in node) {
+            if (node[key] && typeof node[key] === 'object') {
+                if (Array.isArray(node[key])) node[key].forEach(n => this.inferTypes(n));
+                else this.inferTypes(node[key]);
+            }
+        }
     }
     transformChunk(node) { node.body = node.body.map(s => this.transformStatement(s)); }
     transformStatement(node) {
@@ -462,26 +430,28 @@ class LuaTransformer {
         switch (node.type) {
             case 'LocalStatement':
                 node.init = node.init.map(e => this.transformExpression(e));
-                if (node.init.length === 1 && node.init[0].type === 'CallExpression') {
-                    if (node.init[0].base.type === 'MemberExpression' && node.init[0].base.property === 'GetService') {
-                        node.names = node.names.map(n => this.declare(n, 'service'));
-                    } else if (node.init[0].base.type === 'MemberExpression' && node.init[0].base.object.name === 'Instance' && node.init[0].base.property === 'new') {
-                        node.names = node.names.map(n => this.declare(n, 'instance'));
-                    } else { node.names = node.names.map(n => this.declare(n, 'var')); }
-                } else if (node.init.length === 1 && node.init[0].type === 'TableConstructor') {
-                    node.names = node.names.map(n => this.declare(n, 'table'));
-                } else { node.names = node.names.map(n => this.declare(n, 'var')); }
+                node.names = node.names.map(n => {
+                    const inferred = this.typeInference.get(n);
+                    if (inferred) {
+                        const clean = inferred.value.replace(/[^a-zA-Z0-9_]/g, "");
+                        if (inferred.type === 'service') return this.declare(n, clean + '_Service');
+                        if (inferred.type === 'instance') return this.declare(n, clean + '_Instance');
+                    }
+                    if (node.init.length === 1 && node.init[0].type === 'TableConstructor') return this.declare(n, 'Table_' + this.counters.table++);
+                    if (node.init.length === 1 && node.init[0].type === 'FunctionExpression') return this.declare(n, 'Function_' + this.counters.func++);
+                    return this.declare(n, 'Var_' + this.counters.var++);
+                });
                 return node;
             case 'LocalFunctionStatement':
-                node.name = this.declare(node.name, 'function');
+                node.name = this.declare(node.name, 'Function_' + this.counters.func++);
                 this.enterScope();
-                node.func.params = node.func.params.map(p => this.declare(p, 'param'));
+                node.func.params = node.func.params.map(p => this.declare(p, 'Param_' + this.counters.param++));
                 node.func.body = node.func.body.map(s => this.transformStatement(s));
                 this.exitScope();
                 return node;
             case 'FunctionStatement':
                 this.enterScope();
-                node.func.params = node.func.params.map(p => this.declare(p, 'param'));
+                node.func.params = node.func.params.map(p => this.declare(p, 'Param_' + this.counters.param++));
                 node.func.body = node.func.body.map(s => this.transformStatement(s));
                 this.exitScope();
                 return node;
@@ -489,9 +459,7 @@ class LuaTransformer {
                 node.values = node.values.map(e => this.transformExpression(e));
                 node.targets = node.targets.map(e => this.transformExpression(e));
                 return node;
-            case 'CallStatement':
-                node.expression = this.transformExpression(node.expression);
-                return node;
+            case 'CallStatement': node.expression = this.transformExpression(node.expression); return node;
             case 'IfStatement':
                 node.clauses = node.clauses.map(c => {
                     c.cond = this.transformExpression(c.cond);
@@ -511,14 +479,14 @@ class LuaTransformer {
                 node.end = this.transformExpression(node.end);
                 if (node.step) node.step = this.transformExpression(node.step);
                 this.enterScope();
-                node.name = this.declare(node.name, 'var');
+                node.name = this.declare(node.name, 'Index_' + this.counters.index++);
                 node.body = node.body.map(s => this.transformStatement(s));
                 this.exitScope();
                 return node;
             case 'GenericForStatement':
                 node.exprs = node.exprs.map(e => this.transformExpression(e));
                 this.enterScope();
-                node.names = node.names.map(n => this.declare(n, 'var'));
+                node.names = node.names.map(n => this.declare(n, 'Value_' + this.counters.value++));
                 node.body = node.body.map(s => this.transformStatement(s));
                 this.exitScope();
                 return node;
@@ -539,9 +507,7 @@ class LuaTransformer {
                 node.body = node.body.map(s => this.transformStatement(s));
                 this.exitScope();
                 return node;
-            case 'ReturnStatement':
-                node.exprs = node.exprs.map(e => this.transformExpression(e));
-                return node;
+            case 'ReturnStatement': node.exprs = node.exprs.map(e => this.transformExpression(e)); return node;
         }
         return node;
     }
@@ -560,7 +526,7 @@ class LuaTransformer {
             case 'TableConstructor': node.fields = node.fields.map(f => { if (f.key) f.key = this.transformExpression(f.key); f.value = this.transformExpression(f.value); return f; }); return node;
             case 'FunctionExpression':
                 this.enterScope();
-                node.params = node.params.map(p => this.declare(p, 'param'));
+                node.params = node.params.map(p => this.declare(p, 'Param_' + this.counters.param++));
                 node.body = node.body.map(s => this.transformStatement(s));
                 this.exitScope();
                 return node;
@@ -572,9 +538,7 @@ class LuaTransformer {
 class LuaGenerator {
     constructor() { this.indentStr = '    '; }
     generate(ast) { return this.printBlock(ast.body, 0); }
-    printBlock(body, indent) {
-        return body.map(stmt => this.printStatement(stmt, indent)).join('\n');
-    }
+    printBlock(body, indent) { return body.map(stmt => this.printStatement(stmt, indent)).join('\n'); }
     printStatement(node, indent) {
         const ind = this.indentStr.repeat(indent);
         if (!node) return '';
@@ -589,13 +553,10 @@ class LuaGenerator {
                 return ind + 'function ' + node.name + '(' + node.func.params.join(', ') + ')\n' + this.printBlock(node.func.body, indent + 1) + '\n' + ind + 'end';
             case 'AssignmentStatement':
                 return ind + node.targets.map(e => this.printExpression(e)).join(', ') + ' = ' + node.values.map(e => this.printExpression(e)).join(', ');
-            case 'CallStatement':
-                return ind + this.printExpression(node.expression);
+            case 'CallStatement': return ind + this.printExpression(node.expression);
             case 'IfStatement':
                 let istr = ind + 'if ' + this.printExpression(node.clauses[0].cond) + ' then\n' + this.printBlock(node.clauses[0].body, indent + 1);
-                for (let i = 1; i < node.clauses.length; i++) {
-                    istr += '\n' + ind + 'elseif ' + this.printExpression(node.clauses[i].cond) + ' then\n' + this.printBlock(node.clauses[i].body, indent + 1);
-                }
+                for (let i = 1; i < node.clauses.length; i++) istr += '\n' + ind + 'elseif ' + this.printExpression(node.clauses[i].cond) + ' then\n' + this.printBlock(node.clauses[i].body, indent + 1);
                 if (node.elseBody) istr += '\n' + ind + 'else\n' + this.printBlock(node.elseBody, indent + 1);
                 return istr + '\n' + ind + 'end';
             case 'NumericForStatement':
@@ -608,12 +569,9 @@ class LuaGenerator {
                 return ind + 'while ' + this.printExpression(node.cond) + ' do\n' + this.printBlock(node.body, indent + 1) + '\n' + ind + 'end';
             case 'RepeatStatement':
                 return ind + 'repeat\n' + this.printBlock(node.body, indent + 1) + '\n' + ind + 'until ' + this.printExpression(node.cond);
-            case 'DoStatement':
-                return ind + 'do\n' + this.printBlock(node.body, indent + 1) + '\n' + ind + 'end';
-            case 'ReturnStatement':
-                return ind + 'return' + (node.exprs.length > 0 ? ' ' + node.exprs.map(e => this.printExpression(e)).join(', ') : '');
-            case 'BreakStatement':
-                return ind + 'break';
+            case 'DoStatement': return ind + 'do\n' + this.printBlock(node.body, indent + 1) + '\n' + ind + 'end';
+            case 'ReturnStatement': return ind + 'return' + (node.exprs.length > 0 ? ' ' + node.exprs.map(e => this.printExpression(e)).join(', ') : '');
+            case 'BreakStatement': return ind + 'break';
         }
         return '';
     }
@@ -623,24 +581,29 @@ class LuaGenerator {
             case 'NilLiteral': return 'nil';
             case 'BooleanLiteral': return node.value ? 'true' : 'false';
             case 'NumberLiteral': return node.value;
-            case 'StringLiteral':
-                if (node.isLong) return node.quote + node.value + node.quote;
-                return node.quote + node.value + node.quote;
+            case 'StringLiteral': return node.quote + node.value + node.quote;
             case 'VarargLiteral': return '...';
             case 'Identifier': return node.name;
-            case 'BinaryExpression': return '(' + this.printExpression(node.left) + ' ' + node.operator + ' ' + this.printExpression(node.right) + ')';
-            case 'UnaryExpression': return node.operator + this.printExpression(node.argument);
+            case 'BinaryExpression':
+                const left = this.printExpression(node.left);
+                const right = this.printExpression(node.right);
+                if (node.operator === '..') return left + ' .. ' + right;
+                return '(' + left + ' ' + node.operator + ' ' + right + ')';
+            case 'UnaryExpression': return node.operator + (node.operator === 'not' ? ' ' : '') + this.printExpression(node.argument);
             case 'MemberExpression': return this.printExpression(node.object) + '.' + node.property;
             case 'IndexExpression': return this.printExpression(node.object) + '[' + this.printExpression(node.index) + ']';
             case 'CallExpression': return this.printExpression(node.base) + '(' + node.args.map(a => this.printExpression(a)).join(', ') + ')';
             case 'MethodCallExpression': return this.printExpression(node.object) + ':' + node.method + '(' + node.args.map(a => this.printExpression(a)).join(', ') + ')';
             case 'FunctionExpression': return 'function(' + node.params.join(', ') + ')\n' + this.printBlock(node.body, 1) + '\nend';
             case 'TableConstructor':
-                return '{' + node.fields.map(f => {
-                    if (f.type === 'TableKey') return '[' + this.printExpression(f.key) + '] = ' + this.printExpression(f.value);
-                    if (f.type === 'TableKeyString') return f.key + ' = ' + this.printExpression(f.value);
-                    return this.printExpression(f.value);
-                }).join(', ') + '}';
+                if (node.fields.length === 0) return '{}';
+                return '{\n' + node.fields.map(f => {
+                    let fstr = this.indentStr;
+                    if (f.type === 'TableKey') fstr += '[' + this.printExpression(f.key) + '] = ' + this.printExpression(f.value);
+                    else if (f.type === 'TableKeyString') fstr += f.key + ' = ' + this.printExpression(f.value);
+                    else fstr += this.printExpression(f.value);
+                    return fstr;
+                }).join(',\n') + '\n}';
         }
         return '';
     }
@@ -709,7 +672,7 @@ class MoonsecBridge {
                 if (char.length === 1) reverseMap[char] = i;
             }
             return code.replace(/(["'])(.*?)\1/g, (match, quote, content) => {
-                if (!/ط§|ظ„|طھ|ط£|ط¥|ط­|ط·|ظ…|ط¯|ط©|ï؟½|�/.test(content)) return match;
+                if (!/ط§|ظ„|طھ|ط£|ط¥|ط­|ط·|ظ…|ط¯|ط©|ï¿½|�/.test(content)) return match;
                 let bytes = [];
                 for (let i = 0; i < content.length; i++) {
                     const char = content[i];
