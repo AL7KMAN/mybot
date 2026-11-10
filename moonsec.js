@@ -1,7 +1,6 @@
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
-const luaparse = require("luaparse");
 
 class MoonsecBridge {
     static async run(inputFile) {
@@ -68,29 +67,27 @@ class MoonsecBridge {
     
     static fixMojibake(str) {
         if (!str) return str;
-        const decoder = new TextDecoder('windows-1256');
-        const win1256Map = {};
-        for (let i = 0; i < 256; i++) {
-            win1256Map[decoder.decode(new Uint8Array([i]))] = i;
-        }
-
-        let bytes = [];
+        const win1256Bytes = new Uint8Array(str.length);
         let hasMojibake = false;
+
         for (let i = 0; i < str.length; i++) {
-            const char = str.charAt(i);
-            if (win1256Map[char] !== undefined) {
-                bytes.push(win1256Map[char]);
-                if (win1256Map[char] > 127) hasMojibake = true;
+            const code = str.charCodeAt(i);
+            if (code >= 0xC0 && code <= 0xFF) {
+                win1256Bytes[i] = code;
+                hasMojibake = true;
+            } else if (code === 0xA4 || code === 0xA6 || code === 0xA8 || code === 0xAA) {
+                win1256Bytes[i] = code;
+                hasMojibake = true;
             } else {
-                bytes.push(str.charCodeAt(i) & 0xFF);
+                win1256Bytes[i] = code & 0xFF;
             }
         }
 
         if (!hasMojibake) return str;
 
         try {
-            const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
-            return utf8Decoder.decode(new Uint8Array(bytes));
+            const decoder = new TextDecoder('utf-8', { fatal: false });
+            return decoder.decode(win1256Bytes);
         } catch (e) {
             return str;
         }
@@ -116,88 +113,61 @@ class MoonsecBridge {
         return { text: finalCode, urls: uniqueUrls, decompiler: source };
     }
 
-    static inferVariableNames(luaCode) {
-        let modifiedCode = luaCode;
-        const renameMap = new Map();
+    static inferVariableNames(code) {
+        let modified = code;
+        const map = new Map();
 
-        try {
-            const ast = luaparse.parse(luaCode);
-            const traverse = (node) => {
-                if (!node) return;
-                if (node.type === 'LocalStatement' || node.type === 'AssignmentStatement') {
-                    const initList = node.init || [];
-                    const targets = node.type === 'LocalStatement' ? node.variables : node.targets;
-                    initList.forEach((initNode, index) => {
-                        const target = targets[index];
-                        if (target && target.type === 'Identifier') {
-                            const varName = target.name;
-                            if (initNode.type === 'CallExpression') {
-                                const base = initNode.base;
-                                const args = initNode.arguments || [];
-                                let serviceName = null;
-                                if (base && base.type === 'MemberExpression' && base.identifier && base.identifier.name === 'GetService') {
-                                    if (args.length > 0 && args[0].type === 'StringLiteral') {
-                                        serviceName = args[0].value;
-                                    }
-                                }
-                                if (base && base.type === 'MemberExpression' && base.base && base.base.name === 'Instance' && base.identifier && base.identifier.name === 'new') {
-                                    if (args.length > 0 && args[0].type === 'StringLiteral') {
-                                        serviceName = args[0].value + "_Instance";
-                                    }
-                                }
-                                if (serviceName && (varName.startsWith('r') || varName.startsWith('p'))) {
-                                    const cleanName = serviceName.replace(/[^a-zA-Z0-9_]/g, "") + "_Service";
-                                    renameMap.set(varName, cleanName);
-                                }
-                            }
-                        }
-                    });
-                }
-                for (let key in node) {
-                    if (node[key] && typeof node[key] === 'object') {
-                        if (Array.isArray(node[key])) {
-                            node[key].forEach(traverse);
-                        } else {
-                            traverse(node[key]);
-                        }
-                    }
-                }
-            };
-            traverse(ast);
-        } catch (e) {
-            const servRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[:\.]GetService\s*\(\s*["']([^"']+)["']\s*\)/g;
-            let match;
-            while ((match = servRegex.exec(luaCode)) !== null) {
-                const varName = match[1];
-                const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-                if (varName.startsWith('r') || varName.startsWith('p')) {
-                    renameMap.set(varName, cleanName + "_Service");
-                }
+        const servRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[:\.]GetService\s*\(\s*["']([^"']+)["']\s*\)/g;
+        let match;
+        while ((match = servRegex.exec(code)) !== null) {
+            const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
+            map.set(match[1], cleanName + "_Service");
+        }
+
+        const instRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[\.\:]new\s*\(\s*["']([^"']+)["']/g;
+        while ((match = instRegex.exec(code)) !== null) {
+            const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
+            if (!map.has(match[1])) {
+                map.set(match[1], cleanName + "_Inst");
             }
         }
-        
-        renameMap.forEach((newName, oldName) => {
-            const boundaryRegex = new RegExp(`\\b${oldName}\\b`, 'g');
-            modifiedCode = modifiedCode.replace(boundaryRegex, newName);
-        });
-        return modifiedCode;
+
+        const lpRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\.LocalPlayer/g;
+        while ((match = lpRegex.exec(code)) !== null) {
+            if (!map.has(match[1])) {
+                map.set(match[1], "LocalPlayer");
+            }
+        }
+
+        const sortedKeys = Array.from(map.keys()).sort((a, b) => b.length - a.length);
+        for (const oldName of sortedKeys) {
+            const newName = map.get(oldName);
+            const regex = new RegExp(`\\b${oldName}\\b`, 'g');
+            modified = modified.replace(regex, newName);
+        }
+
+        return modified;
     }
     
     static tryRun(cmd, args, timeoutMs) {
         return new Promise((resolve) => {
             try {
                 const proc = spawn(cmd, args, { timeout: timeoutMs, killSignal: 'SIGKILL' });
-                let out = "", err = "";
+                let chunks = [];
+                let err = "";
                 
-                proc.stdout.on("data", (data) => { out += data.toString(); });
+                proc.stdout.on("data", (data) => { chunks.push(data); });
                 proc.stderr.on("data", (data) => { err += data.toString(); });
                 
                 proc.on("error", (e) => resolve({ success: false, out: "", error: e.message }));
                 proc.on("close", (code) => {
-                    if (code === 0 && out.length > 50) {
-                        resolve({ success: true, out: out, error: null });
+                    const outBuffer = Buffer.concat(chunks);
+                    const outStr = outBuffer.toString('binary');
+                    
+                    if (code === 0 && outStr.length > 50) {
+                        resolve({ success: true, out: outStr, error: null });
                     } else {
-                        resolve({ success: false, out: out, error: err.slice(-500) || `Exit code ${code}` });
+                        resolve({ success: false, out: outStr, error: err.slice(-500) || `Exit code ${code}` });
                     }
                 });
             } catch (e) {
