@@ -8,13 +8,14 @@ class MoonsecBridge {
         if (dllResult.success) {
             const decompileResult = await MoonsecBridge.tryDecompress(dllResult.luacFile);
             if (!decompileResult.isBytecode) {
-                let processedText = decompileResult.text;
+                let safeCode = decompileResult.text;
                 
-                try { processedText = MoonsecBridge.fixMojibake(processedText); } catch (e) {}
-                try { processedText = MoonsecBridge.deepClean(processedText); } catch (e) {}
-                try { processedText = MoonsecBridge.massiveRenameEngine(processedText); } catch (e) {}
+                try { safeCode = MoonsecBridge.fixMojibake(safeCode); } catch (e) {}
+                try { safeCode = MoonsecBridge.cleanArtifacts(safeCode); } catch (e) {}
+                try { safeCode = MoonsecBridge.safeRenameEngine(safeCode); } catch (e) {}
+                try { safeCode = MoonsecBridge.beautify(safeCode); } catch (e) {}
 
-                return { text: processedText, urls: MoonsecBridge.extractUrls(processedText), decompiler: decompileResult.decompiler };
+                return { text: safeCode, urls: MoonsecBridge.extractUrls(safeCode), decompiler: decompileResult.decompiler };
             }
             return { error: `Pipeline failed. Reason: ${decompileResult.error}` };
         }
@@ -25,7 +26,7 @@ class MoonsecBridge {
         return new Promise((resolve) => {
             const luacFile = inputFile + ".luac";
             const dllPath = path.join(__dirname, "moonsec_bin/MoonsecDeobfuscator.dll");
-
+            
             const proc = spawn("dotnet", [dllPath, "-dev", "-i", inputFile, "-o", luacFile], { 
                 timeout: 180000, 
                 killSignal: 'SIGKILL' 
@@ -63,52 +64,49 @@ class MoonsecBridge {
             return { text: javaResult.out, decompiler: "unluac (Java)" };
         }
         
-        const errorMsg = `Rust: ${rsResult.error} | Java: ${javaResult.error}`;
-        return { isBytecode: true, error: errorMsg };
+        return { isBytecode: true, error: `Rust: ${rsResult.error} | Java: ${javaResult.error}` };
     }
 
     static fixMojibake(str) {
-        if (!str) return str;
+        if (!str || typeof str !== 'string') return str;
         try {
-            const decoder = new TextDecoder('windows-1256');
-            const win1256Map = {};
-            for (let i = 0; i < 256; i++) {
-                win1256Map[decoder.decode(new Uint8Array([i]))] = i;
-            }
-
-            let bytes = [];
+            const win1256Bytes = new Uint8Array(str.length);
             let hasMojibake = false;
+
             for (let i = 0; i < str.length; i++) {
-                const char = str.charAt(i);
-                if (win1256Map[char] !== undefined) {
-                    bytes.push(win1256Map[char]);
-                    if (win1256Map[char] > 127) hasMojibake = true;
+                const code = str.charCodeAt(i);
+                if (code >= 0xC0 && code <= 0xFF) {
+                    win1256Bytes[i] = code;
+                    hasMojibake = true;
+                } else if (code === 0xA4 || code === 0xA6 || code === 0xA8 || code === 0xAA) {
+                    win1256Bytes[i] = code;
+                    hasMojibake = true;
                 } else {
-                    bytes.push(str.charCodeAt(i) & 0xFF);
+                    win1256Bytes[i] = code & 0xFF;
                 }
             }
 
             if (!hasMojibake) return str;
-            const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
-            return utf8Decoder.decode(new Uint8Array(bytes));
+
+            const decoder = new TextDecoder('utf-8', { fatal: false });
+            return decoder.decode(win1256Bytes);
         } catch (e) {
             return str;
         }
     }
 
-    static deepClean(code) {
-        let finalCode = code;
-        finalCode = finalCode.replace(/^-- file:.*$/gm, '');
-        finalCode = finalCode.replace(/^-- dialect:.*$/gm, '');
-        finalCode = finalCode.replace(/^-- encoding:.*$/gm, '');
-        finalCode = finalCode.replace(/^-- decompiled by.*$/gm, '');
-        finalCode = finalCode.replace(/ -- proto#\d+.*$/gm, '');
-        finalCode = finalCode.replace(/-- PHASE_BOUNDARY:\w+\s*/g, '');
-        finalCode = finalCode.replace(/-- \[\d+\]\s*/g, '');
-        finalCode = finalCode.replace(/\[POL\] - /g, '-- ');
-        finalCode = finalCode.replace(/\n{3,}/g, '\n\n');
-        finalCode = finalCode.trim();
-        return finalCode;
+    static cleanArtifacts(code) {
+        let c = code;
+        c = c.replace(/^-- file:.*$/gm, '');
+        c = c.replace(/^-- dialect:.*$/gm, '');
+        c = c.replace(/^-- encoding:.*$/gm, '');
+        c = c.replace(/^-- decompiled by.*$/gm, '');
+        c = c.replace(/ -- proto#\d+.*$/gm, '');
+        c = c.replace(/-- PHASE_BOUNDARY:\w+\s*/g, '');
+        c = c.replace(/-- \[\d+\]\s*/g, '');
+        c = c.replace(/\[POL\] - /g, '-- ');
+        c = c.replace(/\n{3,}/g, '\n\n');
+        return c.trim();
     }
 
     static extractUrls(code) {
@@ -116,218 +114,75 @@ class MoonsecBridge {
         return [...new Set(urls)].filter(u => u.length > 10 && u.length < 250);
     }
 
-    static massiveRenameEngine(code) {
+    static safeRenameEngine(code) {
         let modified = code;
         const renameMap = new Map();
         const usedNames = new Set();
-        
-        const safeAdd = (oldName, newName) => {
-            if (!oldName || !newName) return;
-            if (!oldName.match(/^[a-zA-Z0-9_]+$/)) return;
+
+        const addRename = (oldName, newNameBase) => {
+            if (!oldName || !newNameBase) return;
             if (renameMap.has(oldName)) return;
+            if (!oldName.match(/^[a-zA-Z0-9_]+$/)) return;
             if (!oldName.match(/^[rp]\d+_\d+$/)) return;
-            
-            let baseName = newName;
+
+            let finalName = newNameBase;
             let counter = 1;
-            while (usedNames.has(newName)) {
-                newName = baseName + "_" + counter;
-                counter++;
+            while (usedNames.has(finalName)) {
+                finalName = newNameBase + "_" + counter++;
             }
-            
-            usedNames.add(newName);
-            renameMap.set(oldName, newName);
+            usedNames.add(finalName);
+            renameMap.set(oldName, finalName);
         };
 
-        const passServices = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[:\.]GetService\s*\(\s*["']([^"']+)["']\s*\)/g;
-            let match;
-            while ((match = regex.exec(modified)) !== null) {
-                const clean = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-                safeAdd(match[1], clean + "_Service");
-            }
-        };
+        const servRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*[a-zA-Z0-9_]+[:\.]GetService\s*\(\s*["']([^"']+)["']\s*\)/g;
+        let match;
+        while ((match = servRegex.exec(code)) !== null) {
+            const clean = match[2].replace(/[^a-zA-Z0-9_]/g, "");
+            addRename(match[1], clean + "_Service");
+        }
 
-        const passInstances = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*Instance\.new\s*\(\s*["']([^"']+)["']/g;
-            let match;
-            while ((match = regex.exec(modified)) !== null) {
-                const clean = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-                safeAdd(match[1], clean + "_Inst");
-            }
-        };
+        const instRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*Instance\.new\s*\(\s*["']([^"']+)["']/g;
+        while ((match = instRegex.exec(code)) !== null) {
+            const clean = match[2].replace(/[^a-zA-Z0-9_]/g, "");
+            addRename(match[1], clean + "_Instance");
+        }
 
-        const passLocalPlayer = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\.LocalPlayer/g;
-            let match;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "LocalPlayer");
-            }
-        };
+        const lpRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*[a-zA-Z0-9_]+\.LocalPlayer/g;
+        while ((match = lpRegex.exec(code)) !== null) {
+            addRename(match[1], "LocalPlayer");
+        }
 
-        const passUiProperties = () => {
-            const properties = [
-                "Size", "Position", "AnchorPoint", "BackgroundColor3", "BorderSizePixel", 
-                "Visible", "Active", "Draggable", "Text", "TextColor3", "TextScaled", 
-                "Font", "ZIndex", "CornerRadius", "PlaceholderText", "CanvasSize", 
-                "ScrollBarThickness", "SortOrder", "Padding", "Image", "Parent"
-            ];
-            properties.forEach(prop => {
-                const regex = new RegExp(`local\\s+([a-zA-Z0-9_]+)\\s*=\\s*[a-zA-Z0-9_]+\\[\\s*["']${prop}["']\\s*\\]`, "g");
-                let match;
-                while ((match = regex.exec(modified)) !== null) {
-                    safeAdd(match[1], prop + "_Val");
-                }
-            });
-        };
-
-        const passFunctions = () => {
-            const regex = /local\s+function\s+([a-zA-Z0-9_]+)\s*\(/g;
-            let match;
-            let count = 1;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "Function_" + count++);
-            }
-        };
-
-        const passTables = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\{\s*[^}]+\}/g;
-            let match;
-            let count = 1;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "Table_" + count++);
-            }
-        };
-
-        const passLoops = () => {
-            const regex = /for\s+([a-zA-Z0-9_]+)\s*,\s*([a-zA-Z0-9_]+)\s+in\s+[^\n]+do/g;
-            let match;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "Index");
-                safeAdd(match[2], "Value");
-            }
-        };
-
-        const passEvents = () => {
-            const events = ["Connect", "MouseButton1Click", "RenderStepped", "PlayerAdded", "PlayerRemoving"];
-            events.forEach(ev => {
-                const regex = new RegExp(`:\\s*${ev}\\s*\\(\\s*function\\s*\\(\\s*([a-zA-Z0-9_]+)?\\s*\\)`, "g");
-                let match;
-                while ((match = regex.exec(modified)) !== null) {
-                    if (match[1]) safeAdd(match[1], ev + "_Arg");
-                }
-            });
-        };
-
-        const passConnections = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*[a-zA-Z0-9_]+\\s*:\\s*Connect\\s*\\(/g;
-            let match;
-            let count = 1;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "Connection_" + count++);
-            }
-        };
-
-        const passMath = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*math\.(floor|ceil|abs|sqrt|random|clamp)\s*\(/g;
-            let match;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "Math_" + match[2].charAt(0).toUpperCase() + match[2].slice(1));
-            }
-        };
-
-        const passStrings = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*string\.(format|lower|upper|sub|gsub|find|match)\s*\(/g;
-            let match;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "String_" + match[2].charAt(0).toUpperCase() + match[2].slice(1));
-            }
-        };
-
-        const passTablesCalls = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*table\.(insert|remove|concat|unpack|sort)\s*\(/g;
-            let match;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "TableOp_" + match[2].charAt(0).toUpperCase() + match[2].slice(1));
-            }
-        };
-
-        const passBooleans = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*(true|false)/g;
-            let match;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "Is" + match[2].charAt(0).toUpperCase() + match[2].slice(1));
-            }
-        };
-
-        const passNumbers = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*-?\d+/g;
-            let match;
-            let count = 1;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "Number_" + count++);
-            }
-        };
-
-        const passStringLiterals = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)\s*=\s*["']/g;
-            let match;
-            let count = 1;
-            while ((match = regex.exec(modified)) !== null) {
-                safeAdd(match[1], "StringLiteral_" + count++);
-            }
-        };
-
-        const passRemainingLocals = () => {
-            const regex = /local\s+([a-zA-Z0-9_]+)/g;
-            let match;
-            let count = 1;
-            while ((match = regex.exec(modified)) !== null) {
-                if (!renameMap.has(match[1]) && match[1].match(/^[rp]\d+_\d+$/)) {
-                    safeAdd(match[1], "UnknownVar_" + count++);
-                }
-            }
-        };
-
-        const passGlobalAssignments = () => {
-            const regex = /^([a-zA-Z0-9_]+)\s*=\s*/gm;
-            let match;
-            while ((match = regex.exec(modified)) !== null) {
-                if (match[1].match(/^[rp]\d+_\d+$/)) {
-                    safeAdd(match[1], "GlobalVar_" + match[1]);
-                }
-            }
-        };
-
-        const applyRenames = () => {
-            const sortedKeys = Array.from(renameMap.keys()).sort((a, b) => b.length - a.length);
-            for (const oldName of sortedKeys) {
-                const newName = renameMap.get(oldName);
-                const regex = new RegExp(`\\b${oldName}\\b`, 'g');
-                modified = modified.replace(regex, newName);
-            }
-        };
-
-        passServices();
-        passInstances();
-        passLocalPlayer();
-        passUiProperties();
-        passFunctions();
-        passTables();
-        passLoops();
-        passEvents();
-        passConnections();
-        passMath();
-        passStrings();
-        passTablesCalls();
-        passBooleans();
-        passNumbers();
-        passStringLiterals();
-        passRemainingLocals();
-        passGlobalAssignments();
-
-        applyRenames();
+        const sortedKeys = Array.from(renameMap.keys()).sort((a, b) => b.length - a.length);
+        for (const oldName of sortedKeys) {
+            const newName = renameMap.get(oldName);
+            const regex = new RegExp(`\\b${oldName}\\b`, 'g');
+            modified = modified.replace(regex, newName);
+        }
 
         return modified;
+    }
+
+    static beautify(code) {
+        const lines = code.split('\n');
+        let indent = 0;
+        const result = [];
+        
+        for (let line of lines) {
+            let trimmed = line.trim();
+            if (!trimmed) continue;
+            
+            if (/^(end|else|elseif|until|\})/i.test(trimmed)) {
+                indent = Math.max(0, indent - 1);
+            }
+            
+            result.push("    ".repeat(indent) + trimmed);
+            
+            if (/(then|do|function|repeat|else|elseif|\{)$/i.test(trimmed) && !/^(else|elseif)/i.test(trimmed)) {
+                indent++;
+            }
+        }
+        
+        return result.join('\n');
     }
     
     static tryRun(cmd, args, timeoutMs) {
