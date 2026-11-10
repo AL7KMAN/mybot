@@ -23,6 +23,7 @@ WORKDIR /app
 COPY . .
 
 RUN npm install
+RUN npm install luaparse
 
 RUN git clone https://github.com/prostone4/Prometheus-Deobfuscator.git /app/prometheus-deobf && \
     cd /app/prometheus-deobf && npm install
