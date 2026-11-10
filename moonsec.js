@@ -1,6 +1,7 @@
 const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const luaparse = require("luaparse");
 
 class MoonsecBridge {
     static async run(inputFile) {
@@ -9,8 +10,7 @@ class MoonsecBridge {
             const decompileResult = await MoonsecBridge.tryDecompress(dllResult.luacFile);
             if (!decompileResult.isBytecode) {
                 try {
-                    // نصلح العربي أولاً، وبعدها نرتب المتغيرات
-                    decompileResult.text = MoonsecBridge.fixArabicFromLuac(decompileResult.text, dllResult.luacFile);
+                    decompileResult.text = MoonsecBridge.fixMojibake(decompileResult.text);
                     decompileResult.text = MoonsecBridge.inferVariableNames(decompileResult.text);
                 } catch (e) {}
                 return decompileResult;
@@ -66,6 +66,36 @@ class MoonsecBridge {
         return { isBytecode: true, error: errorMsg };
     }
     
+    static fixMojibake(str) {
+        if (!str) return str;
+        const decoder = new TextDecoder('windows-1256');
+        const win1256Map = {};
+        for (let i = 0; i < 256; i++) {
+            win1256Map[decoder.decode(new Uint8Array([i]))] = i;
+        }
+
+        let bytes = [];
+        let hasMojibake = false;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charAt(i);
+            if (win1256Map[char] !== undefined) {
+                bytes.push(win1256Map[char]);
+                if (win1256Map[char] > 127) hasMojibake = true;
+            } else {
+                bytes.push(str.charCodeAt(i) & 0xFF);
+            }
+        }
+
+        if (!hasMojibake) return str;
+
+        try {
+            const utf8Decoder = new TextDecoder('utf-8', { fatal: false });
+            return utf8Decoder.decode(new Uint8Array(bytes));
+        } catch (e) {
+            return str;
+        }
+    }
+
     static formatOutput(code, source) {
         let finalCode = code;
         
@@ -86,75 +116,71 @@ class MoonsecBridge {
         return { text: finalCode, urls: uniqueUrls, decompiler: source };
     }
 
-    static fixArabicFromLuac(code, luacPath) {
-        let fixedCode = code;
+    static inferVariableNames(luaCode) {
+        let modifiedCode = luaCode;
+        const renameMap = new Map();
+
         try {
-            const buf = fs.readFileSync(luacPath);
-            const text = buf.toString('binary');
-            const arabicStrings = [];
-            
-            // نبحث عن أي مقاطع تحتوي على حروف عربية داخل ملف البايت كود
-            const regex = /[\x20-\x7E\xC0-\xFF]{3,}/g;
-            let match;
-            while ((match = regex.exec(text)) !== null) {
-                const decoded = new TextDecoder('windows-1256').decode(Buffer.from(match[0], 'binary'));
-                if (/[\u0600-\u06FF]/.test(decoded)) {
-                    arabicStrings.push(decoded);
+            const ast = luaparse.parse(luaCode);
+            const traverse = (node) => {
+                if (!node) return;
+                if (node.type === 'LocalStatement' || node.type === 'AssignmentStatement') {
+                    const initList = node.init || [];
+                    const targets = node.type === 'LocalStatement' ? node.variables : node.targets;
+                    initList.forEach((initNode, index) => {
+                        const target = targets[index];
+                        if (target && target.type === 'Identifier') {
+                            const varName = target.name;
+                            if (initNode.type === 'CallExpression') {
+                                const base = initNode.base;
+                                const args = initNode.arguments || [];
+                                let serviceName = null;
+                                if (base && base.type === 'MemberExpression' && base.identifier && base.identifier.name === 'GetService') {
+                                    if (args.length > 0 && args[0].type === 'StringLiteral') {
+                                        serviceName = args[0].value;
+                                    }
+                                }
+                                if (base && base.type === 'MemberExpression' && base.base && base.base.name === 'Instance' && base.identifier && base.identifier.name === 'new') {
+                                    if (args.length > 0 && args[0].type === 'StringLiteral') {
+                                        serviceName = args[0].value + "_Instance";
+                                    }
+                                }
+                                if (serviceName && (varName.startsWith('r') || varName.startsWith('p'))) {
+                                    const cleanName = serviceName.replace(/[^a-zA-Z0-9_]/g, "") + "_Service";
+                                    renameMap.set(varName, cleanName);
+                                }
+                            }
+                        }
+                    });
                 }
-            }
-            
-            const uniqueStrings = [...new Set(arabicStrings)];
-            
-            // نبحث في الكود المفكوك عن النصوص المخربة ونستبدلها بالنص الصحيح
-            fixedCode = fixedCode.replace(/"([^"]+)"/g, (m, content) => {
-                if (!content.includes('\uFFFD') && !content.includes('ï؟½') && !content.includes('�')) {
-                    return m;
-                }
-                
-                let cleanContent = content.replace(/[\uFFFDï؟½�]/g, '').trim();
-                if (cleanContent.length < 2) return m;
-                
-                for (const correct of uniqueStrings) {
-                    if (correct.includes(cleanContent)) {
-                        return `"${correct}"`;
+                for (let key in node) {
+                    if (node[key] && typeof node[key] === 'object') {
+                        if (Array.isArray(node[key])) {
+                            node[key].forEach(traverse);
+                        } else {
+                            traverse(node[key]);
+                        }
                     }
                 }
-                return m;
-            });
-        } catch (e) {}
-        return fixedCode;
-    }
-
-    static inferVariableNames(code) {
-        let modified = code;
-        const map = new Map();
-
-        const servRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[:\.]GetService\s*\(\s*["']([^"']+)["']\s*\)/g;
-        let match;
-        while ((match = servRegex.exec(code)) !== null) {
-            const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-            map.set(match[1], cleanName + "_Service");
+            };
+            traverse(ast);
+        } catch (e) {
+            const servRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[:\.]GetService\s*\(\s*["']([^"']+)["']\s*\)/g;
+            let match;
+            while ((match = servRegex.exec(luaCode)) !== null) {
+                const varName = match[1];
+                const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
+                if (varName.startsWith('r') || varName.startsWith('p')) {
+                    renameMap.set(varName, cleanName + "_Service");
+                }
+            }
         }
-
-        const instRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*\w+[\.\:]new\s*\(\s*["']([^"']+)["']/g;
-        while ((match = instRegex.exec(code)) !== null) {
-            const cleanName = match[2].replace(/[^a-zA-Z0-9_]/g, "");
-            map.set(match[1], cleanName + "_Inst");
-        }
-
-        const lpRegex = /local\s+([a-zA-Z0-9_]+)\s*=\s*([a-zA-Z0-9_]+)\.LocalPlayer/g;
-        while ((match = lpRegex.exec(code)) !== null) {
-            map.set(match[1], "LocalPlayer");
-        }
-
-        const sortedKeys = Array.from(map.keys()).sort((a, b) => b.length - a.length);
-        for (const oldName of sortedKeys) {
-            const newName = map.get(oldName);
-            const regex = new RegExp(`\\b${oldName}\\b`, 'g');
-            modified = modified.replace(regex, newName);
-        }
-
-        return modified;
+        
+        renameMap.forEach((newName, oldName) => {
+            const boundaryRegex = new RegExp(`\\b${oldName}\\b`, 'g');
+            modifiedCode = modifiedCode.replace(boundaryRegex, newName);
+        });
+        return modifiedCode;
     }
     
     static tryRun(cmd, args, timeoutMs) {
