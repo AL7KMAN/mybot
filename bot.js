@@ -8,6 +8,7 @@ const fetch = require("node-fetch");
 const { Logger, Detector, VMAnalyzer, AntiTamperDetector, Deobfuscator, fetchCodeFromUrl, readAttachment } = require('./core.js');
 const { PythonBridge } = require('./tools.js');
 const { MoonsecBridge } = require('./moonsec.js');
+const { IronBrewBridge } = require('./ironbrew.js');
 const { Pipeline } = require('./pipeline.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -209,6 +210,55 @@ async function handleMoonsec(interaction, code) {
     }
 }
 
+async function handleIronBrew(interaction, code) {
+    await interaction.editReply({ content: "⏳ **IronBrew Detected.** Running tool..." });
+
+    const tempDir = path.join(__dirname, `ib_${Date.now()}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempIn = path.join(tempDir, "input.lua");
+    fs.writeFileSync(tempIn, code);
+
+    try {
+        const result = await IronBrewBridge.run(tempIn);
+
+        if (result && result.text && result.text.length > 50) {
+            const urls = extractUrls(result.text);
+            const attachments = [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })];
+            
+            let extraMsg = "";
+            if (urls.length > 0) {
+                extraMsg = "\n\n🔗 **Nested URLs found (raw, not deobfuscated):**\n" + urls.map(u => `- \`${u}\``).join("\n");
+                
+                await interaction.editReply({ 
+                    content: `✅ **IronBrew Deobfuscated!**\n⏳ Fetching raw nested files...${extraMsg}` 
+                });
+                
+                const fetchedFiles = await autoFetchFiles(urls, 5);
+                for (const f of fetchedFiles) {
+                    attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
+                }
+                
+                if (fetchedFiles.length > 0) {
+                    extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} raw nested file(s).**`;
+                }
+            }
+
+            await interaction.editReply({
+                content: `✅ **IronBrew Deobfuscated!**\n📦 ${attachments.length} file(s) attached.${extraMsg}`,
+                files: attachments.slice(0, 10)
+            });
+        } else if (result && result.error) {
+            await interaction.editReply({ content: `❌ **IronBrew Error:** \`${result.error.slice(0, 800)}\`` });
+        } else {
+            await interaction.editReply({ content: "❌ **IronBrew failed (unknown reason).**" });
+        }
+    } catch (err) {
+        await interaction.editReply({ content: `❌ **IronBrew Error:** \`${err.message.slice(0, 800)}\`` });
+    } finally {
+        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+    }
+}
+
 async function handleStandardDeobfuscation(interaction, code, detectionName) {
     await interaction.editReply({ content: "🧠 **Smart Pipeline Activated:** Routing script through tools..." });
     const tempDir = path.join(__dirname, `pipeline_${Date.now()}`);
@@ -282,6 +332,7 @@ client.on("interactionCreate", async (interaction) => {
             if (code.length > 500000) throw new Error("Script exceeds 500KB limit.");
 
             const quickDetect = new Detector(code).detect();
+            const vmInfo = VMAnalyzer.analyze(code);
 
             if (quickDetect.name.includes("Moonsec") || code.includes("MoonSec")) {
                 return await handleMoonsec(interaction, code);
@@ -291,9 +342,8 @@ client.on("interactionCreate", async (interaction) => {
                 return await handleWeAreDevs(interaction, code);
             }
 
-            const vmInfo = VMAnalyzer.analyze(code);
-            if (vmInfo.isVM) {
-                return await handleWeAreDevs(interaction, code);
+            if (quickDetect.name.includes("IronBrew") || vmInfo.likelyFamily === "IronBrew") {
+                return await handleIronBrew(interaction, code);
             }
 
             await handleStandardDeobfuscation(interaction, code, quickDetect.name);
