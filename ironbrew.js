@@ -1,13 +1,13 @@
-const { spawn, execSync } = require("child_process");
+const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 
 class IronBrewBridge {
     static findTool() {
         const candidates = [
-            { path: path.join(__dirname, "lua-deobfuscator-js", "index.js"), runner: "node" },
-            { path: path.join(__dirname, "lua-deobfuscators", "IronBrew2Deobfuscator", "IronBrew2Deobfuscator.dll"), runner: "dotnet" },
-            { path: path.join(__dirname, "lua-deobfuscators", "IronBrew2Deobfuscator", "IronBrew2Deobfuscator.exe"), runner: "mono" }
+            { path: path.join(__dirname, "lua-deobfuscator-js", "index.js"), runner: "node", useCwd: true },
+            { path: path.join(__dirname, "lua-deobfuscators", "IronBrew2Deobfuscator", "IronBrew2Deobfuscator.dll"), runner: "dotnet", useCwd: false },
+            { path: path.join(__dirname, "lua-deobfuscators", "IronBrew2Deobfuscator", "IronBrew2Deobfuscator.exe"), runner: "mono", useCwd: false }
         ];
 
         for (const candidate of candidates) {
@@ -27,7 +27,14 @@ class IronBrewBridge {
         return new Promise((resolve) => {
             let proc;
             try {
-                proc = spawn(tool.runner, [tool.path, inputFile], { timeout: 120000, killSignal: 'SIGKILL' });
+                const cwd = tool.useCwd ? path.dirname(inputFile) : __dirname;
+                const args = tool.useCwd ? [tool.path] : [tool.path, inputFile];
+                
+                proc = spawn(tool.runner, args, { 
+                    timeout: 120000, 
+                    killSignal: 'SIGKILL',
+                    cwd: cwd
+                });
             } catch (spawnErr) {
                 return resolve({ error: "Spawn failed", details: `فشل تشغيل الأداة: ${spawnErr.message}` });
             }
@@ -45,6 +52,13 @@ class IronBrewBridge {
                 if (code === 0 && stdout.length > 50) {
                     return resolve({ text: stdout });
                 }
+                
+                // بعض الأدوات تحفظ النتيجة في ملف بدل الطباعة
+                const outFile = path.join(path.dirname(inputFile), "output.lua");
+                if (fs.existsSync(outFile) && fs.statSync(outFile).size > 50) {
+                    return resolve({ text: fs.readFileSync(outFile, "utf-8") });
+                }
+                
                 resolve({ error: `Tool failed (exit code ${code})`, details: `STDERR:\n${stderr.slice(-800)}\nSTDOUT:\n${stdout.slice(-400)}` });
             });
         });
