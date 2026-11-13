@@ -9,6 +9,7 @@ const { Logger, Detector, VMAnalyzer, AntiTamperDetector, Deobfuscator, fetchCod
 const { PythonBridge } = require('./tools.js');
 const { MoonsecBridge } = require('./moonsec.js');
 const { IronBrewBridge } = require('./ironbrew.js');
+const { LuaObfuscatorBridge } = require('./luaobfuscator.js');
 const { Pipeline } = require('./pipeline.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -93,7 +94,6 @@ async function handleIronBrew(interaction, code) {
     
     try {
         const result = await IronBrewBridge.run(tempIn);
-        
         if (result && result.text && result.text.length > 50) {
             await interaction.editReply({
                 content: `✅ **IronBrew Deobfuscated!**`,
@@ -101,17 +101,43 @@ async function handleIronBrew(interaction, code) {
             });
             return;
         }
-        
         const reportText = `=== LM7H IRONBREW DIAGNOSTIC ===\n\nError: ${result?.error || "Unknown"}\n\nDetails:\n${result?.details || "No details provided"}\n\n===============================`;
-        const snippet = reportText.length > 1500 ? reportText.slice(0, 1500) + "\n... [تم اقتطاع الباقي في الملف]" : reportText;
-        
+        const snippet = reportText.length > 1500 ? reportText.slice(0, 1500) + "\n..." : reportText;
         await interaction.editReply({
             content: `❌ **IronBrew Failed.**\nالتقرير الكامل في الملف المرفق.\n\n\`\`\`text\n${snippet}\n\`\`\``,
             files: [new AttachmentBuilder(Buffer.from(reportText, "utf-8"), { name: "diagnostic_report.txt" })]
         });
-        
     } catch (err) {
         await interaction.editReply({ content: `❌ **IronBrew Crash:**\n\`\`\`${err.message.slice(0, 800)}\`\`\`` });
+    } finally {
+        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+    }
+}
+
+async function handleLuaObfuscator(interaction, code) {
+    await interaction.editReply({ content: "⏳ **LuaObfuscator Detected.** Running..." });
+    const tempDir = path.join(__dirname, `luaobf_${Date.now()}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    const tempIn = path.join(tempDir, "input.lua");
+    fs.writeFileSync(tempIn, code);
+    
+    try {
+        const result = await LuaObfuscatorBridge.run(tempIn);
+        if (result && result.text && result.text.length > 50) {
+            await interaction.editReply({
+                content: `✅ **LuaObfuscator Deobfuscated!**`,
+                files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })]
+            });
+            return;
+        }
+        const reportText = `=== LM7H LUAOBFUSCATOR DIAGNOSTIC ===\n\nError: ${result?.error || "Unknown"}\n\nDetails:\n${result?.details || "No details provided"}\n\n===============================`;
+        const snippet = reportText.length > 1500 ? reportText.slice(0, 1500) + "\n..." : reportText;
+        await interaction.editReply({
+            content: `❌ **LuaObfuscator Failed.**\nالتقرير الكامل في الملف المرفق.\n\n\`\`\`text\n${snippet}\n\`\`\``,
+            files: [new AttachmentBuilder(Buffer.from(reportText, "utf-8"), { name: "diagnostic_report.txt" })]
+        });
+    } catch (err) {
+        await interaction.editReply({ content: `❌ **LuaObfuscator Crash:**\n\`\`\`${err.message.slice(0, 800)}\`\`\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -206,20 +232,7 @@ client.on("interactionCreate", async (interaction) => {
 
     try {
         if (interaction.commandName === "help") {
-            return interaction.editReply({ content: "🤖 **Deobfuscator**\n`/deobf`, `/deobf_url`, `/deobf_file`, `/detect`, `/vmdetect`" });
-        }
-
-        if (interaction.commandName === "vmdetect") {
-            const { code, source } = await resolveCode(interaction);
-            const vm = VMAnalyzer.analyze(code);
-            const at = AntiTamperDetector.detect(code);
-            return interaction.editReply({ content: `🖥️ **VM Analysis**\nSource: ${source}\nIs VM: **${vm.isVM ? "YES" : "No"}**\nFamily: **${vm.likelyFamily}**\nAnti-Tamper: **${at.riskLevel}**` });
-        }
-
-        if (interaction.commandName === "detect") {
-            const { code, source } = await resolveCode(interaction);
-            const detection = new Detector(code).detect();
-            return interaction.editReply({ content: `🔍 **Detection**\nSource: ${source}\nType: **${detection.name}**\nConfidence: **${detection.confidence}%**` });
+            return interaction.editReply({ content: "🤖 **Deobfuscator**\n`/deobf`, `/deobf_url`, `/deobf_file`, `/detect`" });
         }
 
         if (["deobf", "deobf_url", "deobf_file"].includes(interaction.commandName)) {
@@ -228,25 +241,25 @@ client.on("interactionCreate", async (interaction) => {
 
             const quickDetect = new Detector(code).detect();
             const vmInfo = VMAnalyzer.analyze(code);
+            const type = quickDetect.name;
 
-            const isIronBrew = quickDetect.name.includes("IronBrew") || 
-                               vmInfo.likelyFamily === "IronBrew" || 
-                               code.includes("return(function(...)") || 
-                               (code.includes("getfenv") && code.length > 10000);
-
-            if (isIronBrew) {
-                return await handleIronBrew(interaction, code);
-            }
-
-            if (quickDetect.name.includes("Moonsec") || code.includes("MoonSec")) {
+            if (type.includes("Moonsec") || code.includes("MoonSec")) {
                 return await handleMoonsec(interaction, code);
             }
 
-            if (quickDetect.name.includes("WeAreDevs") || code.includes("wearedevs.net/obfuscator")) {
+            if (type.includes("LuaObfuscator")) {
+                return await handleLuaObfuscator(interaction, code);
+            }
+
+            if (type.includes("IronBrew") || type.includes("AztupBrew") || vmInfo.likelyFamily === "IronBrew") {
+                return await handleIronBrew(interaction, code);
+            }
+
+            if (type.includes("WeAreDevs") || code.includes("wearedevs.net/obfuscator")) {
                 return await handleWeAreDevs(interaction, code);
             }
 
-            await handleStandardDeobfuscation(interaction, code, quickDetect.name);
+            await handleStandardDeobfuscation(interaction, code, type);
         }
     } catch (error) {
         await interaction.editReply({ content: `❌ **Error:** ${error.message.slice(0, 1500)}` }).catch(() => {});
