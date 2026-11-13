@@ -8,7 +8,6 @@ const fetch = require("node-fetch");
 const { Logger, Detector, VMAnalyzer, AntiTamperDetector, Deobfuscator, fetchCodeFromUrl, readAttachment } = require('./core.js');
 const { PythonBridge } = require('./tools.js');
 const { MoonsecBridge } = require('./moonsec.js');
-const { IronBrewBridge } = require('./ironbrew.js');
 const { Pipeline } = require('./pipeline.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
@@ -48,51 +47,6 @@ async function resolveCode(interaction) {
     if (urlOpt) return { code: await fetchCodeFromUrl(urlOpt), source: "URL" };
     if (fileOpt) return { code: await readAttachment(fileOpt), source: "File" };
     throw new Error("You must provide code, a URL, or a file.");
-}
-
-async function handleIronBrew(interaction, code) {
-    await interaction.editReply({ content: "⏳ **IronBrew2 Detected.** Running C# deobfuscator..." });
-    const tempDir = path.join(__dirname, `ib_${Date.now()}`);
-    fs.mkdirSync(tempDir, { recursive: true });
-    const tempIn = path.join(tempDir, "input.lua");
-    fs.writeFileSync(tempIn, code);
-    
-    try {
-        const result = await IronBrewBridge.run(tempIn);
-        
-        if (result && result.text && result.text.length > 50) {
-            const urls = result.text.match(/https?:\/\/[^\s"'`]+/g) || [];
-            const attachments = [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })];
-            
-            for (const url of [...new Set(urls)].slice(0, 5)) {
-                try {
-                    const resp = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 10000 });
-                    if (resp.ok) {
-                        const txt = await resp.text();
-                        if (txt.length > 20 && !txt.startsWith("<!DOCTYPE")) {
-                            const fname = url.split("/").pop().split("?")[0].slice(0, 50) || "nested.lua";
-                            attachments.push(new AttachmentBuilder(Buffer.from(txt, "utf-8"), { name: fname }));
-                        }
-                    }
-                } catch (e) {}
-            }
-            
-            await interaction.editReply({ content: `✅ **IronBrew2 Deobfuscated!**\n📦 ${attachments.length} file(s).`, files: attachments.slice(0, 10) });
-            return;
-        }
-        
-        const reportText = `=== LM7H IRONBREW DIAGNOSTIC ===\n\nError: ${result?.error || "Unknown"}\n\nDetails:\n${result?.details || "No details"}\n\n===============================`;
-        const snippet = reportText.length > 1500 ? reportText.slice(0, 1500) + "\n..." : reportText;
-        
-        await interaction.editReply({
-            content: `❌ **IronBrew Failed.**\n\`\`\`text\n${snippet}\n\`\`\``,
-            files: [new AttachmentBuilder(Buffer.from(reportText, "utf-8"), { name: "diagnostic.txt" })]
-        });
-    } catch (err) {
-        await interaction.editReply({ content: `❌ **Error:** ${err.message.slice(0, 800)}` });
-    } finally {
-        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
-    }
 }
 
 async function handleMoonsec(interaction, code) {
@@ -142,6 +96,24 @@ async function handleWeAreDevs(interaction, code) {
     }
 }
 
+async function handleStandardDeobfuscation(interaction, code, detectionName) {
+    await interaction.editReply({ content: "🧠 **Pipeline Activated...**" });
+    const tempDir = path.join(__dirname, `pipeline_${Date.now()}`);
+    fs.mkdirSync(tempDir, { recursive: true });
+    try {
+        const pipelineResult = await Pipeline.runChain(code, tempDir, detectionName);
+        if (pipelineResult.code) {
+            await interaction.editReply({ content: `✅ **Complete!**`, files: [new AttachmentBuilder(Buffer.from(pipelineResult.code, "utf-8"), { name: "deobfuscated.lua" })] });
+        } else {
+            await interaction.editReply({ content: "❌ **Pipeline failed.**" });
+        }
+    } catch (err) {
+        await interaction.editReply({ content: `❌ **Error:** \`${err.message}\`` });
+    } finally {
+        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+    }
+}
+
 client.once("ready", () => {
     Logger.log("SUCCESS", `Bot online: ${client.user.tag}`);
     registerCommands();
@@ -161,7 +133,6 @@ client.on("interactionCreate", async (interaction) => {
             if (!code || code.trim().length === 0) throw new Error("Script is empty.");
 
             const quickDetect = new Detector(code).detect();
-            const vmInfo = VMAnalyzer.analyze(code);
             const type = quickDetect.name;
 
             if (type.includes("Moonsec") || code.includes("MoonSec")) {
@@ -172,18 +143,7 @@ client.on("interactionCreate", async (interaction) => {
                 return await handleWeAreDevs(interaction, code);
             }
 
-            const isIronBrew = type.includes("IronBrew") || 
-                               type.includes("AztupBrew") || 
-                               vmInfo.likelyFamily === "IronBrew" || 
-                               code.includes("IronBrew") || 
-                               code.includes("getfenv") || 
-                               code.includes("return(function(...)");
-
-            if (isIronBrew) {
-                return await handleIronBrew(interaction, code);
-            }
-
-            return await interaction.editReply({ content: `❌ **Unknown Obfuscator.** The bot can't identify this script type.` });
+            return await handleStandardDeobfuscation(interaction, code, type);
         }
     } catch (error) {
         await interaction.editReply({ content: `❌ **Error:** ${error.message.slice(0, 1500)}` }).catch(() => {});
