@@ -102,25 +102,15 @@ async function handleIronBrew(interaction, code) {
             return;
         }
         
-        const embed = new EmbedBuilder()
-            .setTitle("❌ IronBrew — تقرير تشخيصي كامل")
-            .setColor(0xE74C3C)
-            .setDescription("البوت كشف السكربت كـ **IronBrew** وحاول يفكه، لكن الأداة فشلت. هذا التقرير يوضح بالضبط ما حدث:")
-            .addFields(
-                { name: "🔴 الخطأ", value: `\`\`\`${(result?.error || "غير معروف").slice(0, 200)}\`\`\``, inline: false },
-                { name: "📋 التفاصيل", value: `\`\`\`${(result?.details || "لا توجد تفاصيل").slice(0, 1000)}\`\`\``, inline: false },
-                { name: "🔍 التشخيص", value: `• تم كشف السكربت بواسطة: **Detector**\n• المسار المستخدم: **${result?.error?.includes("not found") ? "غير موجود" : "lua-deobfuscators"}**\n• النتيجة: **فشل**`, inline: false },
-                { name: "🛠️ ما الذي يحتاج إصلاح", value: "1. المسار للملف `.py` الرئيسي\n2. تثبيت مكتبات Python (`pip install -r requirements.txt`)\n3. صيغة الأمر الصحيحة (`python3 tool.py input`)", inline: false }
-            )
-            .setFooter({ text: "أرسل هذا التقرير كاملاً لفهم المشكلة" })
-            .setTimestamp();
+        const reportText = `=== LM7H IRONBREW DIAGNOSTIC ===\n\nError: ${result?.error || "Unknown"}\n\nDetails:\n${result?.details || "No details provided"}\n\n===============================`;
         
-        await interaction.editReply({ embeds: [embed] });
+        await interaction.editReply({
+            content: `❌ **IronBrew Failed.**\nThe full diagnostic report is attached below. You can also copy it directly from the code block:\n\n\`\`\`text\n${reportText}\n\`\`\``,
+            files: [new AttachmentBuilder(Buffer.from(reportText, "utf-8"), { name: "diagnostic_report.txt" })]
+        });
         
     } catch (err) {
-        await interaction.editReply({
-            content: `❌ **IronBrew Crash:**\n\`\`\`${err.message.slice(0, 800)}\`\`\``
-        });
+        await interaction.editReply({ content: `❌ **IronBrew Crash:**\n\`\`\`${err.message.slice(0, 800)}\`\`\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
