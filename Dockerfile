@@ -46,12 +46,4 @@ RUN git clone https://github.com/HansWessels/unluac.git /app/unluac-src && \
     grep -rl "Implicit return must have zero values" src/ | xargs -r sed -i 's/throw new IllegalStateException("Implicit return must have zero values");/System.err.println("[LM7H-Patch] Implicit return ignored");/' && \
     chmod +x build.sh && ./build.sh && cp bin/unluac.jar /app/unluac.jar
 
-RUN git clone https://github.com/memcpython/lua-deobfuscators.git /app/lua-deobfuscators
-RUN git clone https://github.com/Linhqq/Lua-Deobfuscator.git /app/lua-deobfuscator-js
-
-# أداة IronBrew2Deobfuscator بلغة C#
-RUN git clone https://github.com/pirateware/IronbrewDeobfuscator.git /app/ironbrew-cs && \
-    cd /app/ironbrew-cs && \
-    dotnet build -c Release -o /app/ironbrew-bin
-
 CMD ["npm", "start"]
