@@ -65,146 +65,88 @@ function extractUrls(text) {
 async function autoFetchFiles(urls, maxTotal = 5) {
     const files = [];
     const fetchedUrls = new Set();
-    
     for (const url of urls) {
         if (files.length >= maxTotal) break;
         if (fetchedUrls.has(url)) continue;
         fetchedUrls.add(url);
-        
         try {
-            const response = await fetch(url, { 
-                headers: { "User-Agent": "Mozilla/5.0" }, 
-                timeout: 15000 
-            });
+            const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, timeout: 15000 });
             if (!response.ok) continue;
             const text = await response.text();
             if (!text || text.length < 20) continue;
-            
             const lc = text.trim().toLowerCase();
             if (lc.startsWith("<!doctype html") || lc.startsWith("<html")) continue;
-            
             let baseName = (url.split("?")[0].split("/").pop() || "file").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 60);
             if (!baseName) baseName = "fetched";
             if (!baseName.includes(".")) baseName += ".lua";
-            
             files.push({ name: baseName, buffer: Buffer.from(text, "utf-8") });
-        } catch (e) {
-            Logger.log("WARN", `Auto-fetch failed for ${url}`, { error: e.message });
-        }
+        } catch (e) {}
     }
-    
     return files;
 }
 
 async function handleWeAreDevs(interaction, code) {
-    await interaction.editReply({ content: "⏳ **WeAreDevs Detected.** Running Prometheus (pdeobf.js)..." });
-
+    await interaction.editReply({ content: "⏳ **WeAreDevs Detected.** Running Prometheus..." });
     const tempDir = path.join(__dirname, `wd_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
     const tempIn = path.join(tempDir, "input.lua");
     fs.writeFileSync(tempIn, code);
-
     try {
         const rawResult = await PythonBridge.run("wearedevs", tempIn);
-
         if (typeof rawResult !== "string" || rawResult.length < 50) {
-            return interaction.editReply({
-                content: `❌ **WeAreDevs failed.** PythonBridge returned: \`${String(rawResult).slice(0, 400)}\``
-            });
+            return interaction.editReply({ content: `❌ **WeAreDevs failed.** \`${String(rawResult).slice(0, 400)}\`` });
         }
-
         let finalCode = rawResult;
         try {
             const finalDeobf = new Deobfuscator(rawResult, { beautify: true });
             await finalDeobf.run();
-            if (finalDeobf.code && finalDeobf.code.length > 50) {
-                finalCode = finalDeobf.code;
-            }
-        } catch (deobfErr) {
-            Logger.log("WARN", "Deobfuscator cleanup failed", { error: deobfErr.message });
-        }
-
+            if (finalDeobf.code && finalDeobf.code.length > 50) finalCode = finalDeobf.code;
+        } catch (deobfErr) {}
         const urls = extractUrls(finalCode);
         const attachments = [new AttachmentBuilder(Buffer.from(finalCode, "utf-8"), { name: "deobfuscated.lua" })];
-        
         let extraMsg = "";
         if (urls.length > 0) {
-            extraMsg = "\n\n🔗 **Nested URLs found (raw, not deobfuscated):**\n" + urls.map(u => `- \`${u}\``).join("\n");
-            
-            await interaction.editReply({ 
-                content: `✅ **WeAreDevs Deobfuscated!**\n⏳ Fetching raw nested files...${extraMsg}` 
-            });
-            
+            extraMsg = "\n\n🔗 **Nested URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
+            await interaction.editReply({ content: `✅ **WeAreDevs Deobfuscated!**\n⏳ Fetching nested files...${extraMsg}` });
             const fetchedFiles = await autoFetchFiles(urls, 5);
-            for (const f of fetchedFiles) {
-                attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
-            }
-            
-            if (fetchedFiles.length > 0) {
-                extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} raw nested file(s).**`;
-            }
+            for (const f of fetchedFiles) attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
+            if (fetchedFiles.length > 0) extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} nested file(s).**`;
         }
-
-        await interaction.editReply({
-            content: `✅ **WeAreDevs Deobfuscated!**\n📦 ${attachments.length} file(s) attached.${extraMsg}`,
-            files: attachments.slice(0, 10)
-        });
+        await interaction.editReply({ content: `✅ **WeAreDevs Deobfuscated!**\n📦 ${attachments.length} file(s) attached.${extraMsg}`, files: attachments.slice(0, 10) });
     } catch (err) {
-        await interaction.editReply({ content: `❌ **WeAreDevs Error:** \`${err.message.slice(0, 800)}\`` });
+        await interaction.editReply({ content: `❌ **Error:** \`${err.message.slice(0, 800)}\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
 }
 
 async function handleMoonsec(interaction, code) {
-    await interaction.editReply({ content: "⏳ **Moonsec Detected.** Running DLL + decompilers..." });
-
+    await interaction.editReply({ content: "⏳ **Moonsec Detected.** Running..." });
     const tempDir = path.join(__dirname, `ms_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
     const tempIn = path.join(tempDir, "input.lua");
     fs.writeFileSync(tempIn, code);
-
     try {
         const result = await MoonsecBridge.run(tempIn);
-
         if (result && result.text && result.text.length > 50) {
             const urls = result.urls || extractUrls(result.text);
             const attachments = [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })];
-            
             let extraMsg = "";
             if (urls.length > 0) {
-                extraMsg = "\n\n🔗 **Nested URLs found (raw, not deobfuscated):**\n" + urls.map(u => `- \`${u}\``).join("\n");
-                
-                await interaction.editReply({ 
-                    content: `✅ **Moonsec Deobfuscated!** (via \`${result.decompiler}\`)\n⏳ Fetching raw nested files...${extraMsg}` 
-                });
-                
+                extraMsg = "\n\n🔗 **Nested URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
+                await interaction.editReply({ content: `✅ **Moonsec Deobfuscated!**\n⏳ Fetching nested files...${extraMsg}` });
                 const fetchedFiles = await autoFetchFiles(urls, 5);
-                for (const f of fetchedFiles) {
-                    attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
-                }
-                
-                if (fetchedFiles.length > 0) {
-                    extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} raw nested file(s).**`;
-                }
+                for (const f of fetchedFiles) attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
+                if (fetchedFiles.length > 0) extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} nested file(s).**`;
             }
-
-            await interaction.editReply({
-                content: `✅ **Moonsec Deobfuscated!** (via \`${result.decompiler}\`)\n📦 ${attachments.length} file(s) attached.${extraMsg}`,
-                files: attachments.slice(0, 10)
-            });
+            await interaction.editReply({ content: `✅ **Moonsec Deobfuscated!**\n📦 ${attachments.length} file(s) attached.${extraMsg}`, files: attachments.slice(0, 10) });
         } else if (result && result.isBytecode) {
-            await interaction.editReply({
-                content: "⚠️ **Both decompilers failed.** Bytecode extracted. Upload it to `luadec.dev` manually.",
-                files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })]
-            });
+            await interaction.editReply({ content: "⚠️ **Bytecode extracted.** Upload to `luadec.dev`.", files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })] });
         } else if (result && result.error) {
-            await interaction.editReply({ content: `❌ **Moonsec Error:** \`${result.error.slice(0, 800)}\`` });
-        } else {
-            await interaction.editReply({ content: "❌ **Moonsec failed (unknown reason).**" });
+            await interaction.editReply({ content: `❌ **Error:** \`${result.error.slice(0, 800)}\`` });
         }
     } catch (err) {
-        await interaction.editReply({ content: `❌ **Moonsec Error:** \`${err.message.slice(0, 800)}\`` });
+        await interaction.editReply({ content: `❌ **Error:** \`${err.message.slice(0, 800)}\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -212,45 +154,17 @@ async function handleMoonsec(interaction, code) {
 
 async function handleIronBrew(interaction, code) {
     await interaction.editReply({ content: "⏳ **IronBrew Detected.** Running tool..." });
-
     const tempDir = path.join(__dirname, `ib_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
     const tempIn = path.join(tempDir, "input.lua");
     fs.writeFileSync(tempIn, code);
-
     try {
         const result = await IronBrewBridge.run(tempIn);
-
         if (result && result.text && result.text.length > 50) {
-            const urls = extractUrls(result.text);
             const attachments = [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })];
-            
-            let extraMsg = "";
-            if (urls.length > 0) {
-                extraMsg = "\n\n🔗 **Nested URLs found (raw, not deobfuscated):**\n" + urls.map(u => `- \`${u}\``).join("\n");
-                
-                await interaction.editReply({ 
-                    content: `✅ **IronBrew Deobfuscated!**\n⏳ Fetching raw nested files...${extraMsg}` 
-                });
-                
-                const fetchedFiles = await autoFetchFiles(urls, 5);
-                for (const f of fetchedFiles) {
-                    attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
-                }
-                
-                if (fetchedFiles.length > 0) {
-                    extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} raw nested file(s).**`;
-                }
-            }
-
-            await interaction.editReply({
-                content: `✅ **IronBrew Deobfuscated!**\n📦 ${attachments.length} file(s) attached.${extraMsg}`,
-                files: attachments.slice(0, 10)
-            });
+            await interaction.editReply({ content: `✅ **IronBrew Deobfuscated!**`, files: attachments });
         } else if (result && result.error) {
             await interaction.editReply({ content: `❌ **IronBrew Error:** \`${result.error.slice(0, 800)}\`` });
-        } else {
-            await interaction.editReply({ content: "❌ **IronBrew failed (unknown reason).**" });
         }
     } catch (err) {
         await interaction.editReply({ content: `❌ **IronBrew Error:** \`${err.message.slice(0, 800)}\`` });
@@ -260,33 +174,19 @@ async function handleIronBrew(interaction, code) {
 }
 
 async function handleStandardDeobfuscation(interaction, code, detectionName) {
-    await interaction.editReply({ content: "🧠 **Smart Pipeline Activated:** Routing script through tools..." });
+    await interaction.editReply({ content: "🧠 **Pipeline Activated...**" });
     const tempDir = path.join(__dirname, `pipeline_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
-
     try {
         const pipelineResult = await Pipeline.runChain(code, tempDir, detectionName);
         if (pipelineResult.code) {
-            const finalBuffer = Buffer.from(pipelineResult.code, "utf-8");
             const finalName = pipelineResult.isClean ? "deobfuscated_clean.lua" : "extracted_partial.lua";
-
-            const urls = extractUrls(pipelineResult.code);
-            let extraMsg = "";
-            if (urls.length > 0) {
-                extraMsg = "\n\n🔗 **Detected URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
-            }
-
-            const toolsStr = pipelineResult.tools.join(" ➔ ");
-            const statusMsg = pipelineResult.isClean
-                ? `✅ **Deobfuscation Complete!**\n🧠 Pipeline: \`${toolsStr}\`${extraMsg}`
-                : `⚠️ **Partial Extraction.**\n🧠 Pipeline: \`${toolsStr}\`${extraMsg}`;
-
-            await interaction.editReply({ content: statusMsg, files: [new AttachmentBuilder(finalBuffer, { name: finalName })] });
+            await interaction.editReply({ content: `✅ **Complete!**`, files: [new AttachmentBuilder(Buffer.from(pipelineResult.code, "utf-8"), { name: finalName })] });
         } else {
-            await interaction.editReply({ content: "❌ **Pipeline failed.** All tools exhausted." });
+            await interaction.editReply({ content: "❌ **Pipeline failed.**" });
         }
     } catch (err) {
-        await interaction.editReply({ content: `❌ **Pipeline crashed:** \`${err.message}\`` });
+        await interaction.editReply({ content: `❌ **Error:** \`${err.message}\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -303,7 +203,7 @@ client.on("interactionCreate", async (interaction) => {
 
     try {
         if (interaction.commandName === "help") {
-            return interaction.editReply({ content: "🤖 **God-Mode Deobfuscator V5**\n`/deobf`, `/deobf_url`, `/deobf_file`, `/detect`, `/layers`, `/vmdetect`" });
+            return interaction.editReply({ content: "🤖 **Deobfuscator**\n`/deobf`, `/deobf_url`, `/deobf_file`, `/detect`, `/layers`, `/vmdetect`" });
         }
 
         if (interaction.commandName === "vmdetect") {
@@ -316,23 +216,24 @@ client.on("interactionCreate", async (interaction) => {
         if (interaction.commandName === "detect") {
             const { code, source } = await resolveCode(interaction);
             const detection = new Detector(code).detect();
-            const layers = new Detector(code).analyzeLayers(code);
-            return interaction.editReply({ content: `🔍 **Detection**\nSource: ${source}\nType: **${detection.name}**\nConfidence: **${detection.confidence}%**\nLayers: **${layers.layers.length}**` });
-        }
-
-        if (interaction.commandName === "layers") {
-            const code = interaction.options.getString("code");
-            const analysis = new Detector(code).analyzeLayers(code);
-            return interaction.editReply({ content: `🧅 **Analyzed ${analysis.layers.length} layers.**`, files: [new AttachmentBuilder(Buffer.from(analysis.final, "utf-8"), { name: "unwrapped.lua" })] });
+            return interaction.editReply({ content: `🔍 **Detection**\nSource: ${source}\nType: **${detection.name}**\nConfidence: **${detection.confidence}%**` });
         }
 
         if (["deobf", "deobf_url", "deobf_file"].includes(interaction.commandName)) {
             const { code } = await resolveCode(interaction);
             if (!code || code.trim().length === 0) throw new Error("Script is empty.");
-            if (code.length > 500000) throw new Error("Script exceeds 500KB limit.");
 
             const quickDetect = new Detector(code).detect();
             const vmInfo = VMAnalyzer.analyze(code);
+
+            const isIronBrew = quickDetect.name.includes("IronBrew") || 
+                               vmInfo.likelyFamily === "IronBrew" || 
+                               code.includes("return(function(...)") || 
+                               (code.includes("getfenv") && code.length > 10000);
+
+            if (isIronBrew) {
+                return await handleIronBrew(interaction, code);
+            }
 
             if (quickDetect.name.includes("Moonsec") || code.includes("MoonSec")) {
                 return await handleMoonsec(interaction, code);
@@ -342,10 +243,6 @@ client.on("interactionCreate", async (interaction) => {
                 return await handleWeAreDevs(interaction, code);
             }
 
-            if (quickDetect.name.includes("IronBrew") || vmInfo.likelyFamily === "IronBrew") {
-                return await handleIronBrew(interaction, code);
-            }
-
             await handleStandardDeobfuscation(interaction, code, quickDetect.name);
         }
     } catch (error) {
@@ -353,10 +250,6 @@ client.on("interactionCreate", async (interaction) => {
     }
 });
 
-client.on("error", (error) => Logger.log("ERROR", "Client Error", { error: error.message }));
-process.on("unhandledRejection", (error) => Logger.log("ERROR", "Unhandled Rejection", { error: error?.message || error }));
-
-Logger.log("INFO", "Starting bot V5...");
 client.login(TOKEN).catch((error) => {
     Logger.log("ERROR", "Login Failed", { error: error.message });
     process.exit(1);
