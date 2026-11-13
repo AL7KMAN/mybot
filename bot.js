@@ -106,7 +106,7 @@ async function handleMoonsec(interaction, code) {
         if (result && result.text && result.text.length > 50) {
             await interaction.editReply({ content: `✅ **Moonsec Deobfuscated!**`, files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })] });
         } else if (result && result.isBytecode) {
-            await interaction.editReply({ content: "⚠️ **Bytecode extracted.** Upload to `luadec.dev`.", files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })] });
+            await interaction.editReply({ content: "⚠️ **Bytecode extracted.**", files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })] });
         } else {
             await interaction.editReply({ content: `❌ **Error:** \`${result?.error}\`` });
         }
@@ -142,24 +142,6 @@ async function handleWeAreDevs(interaction, code) {
     }
 }
 
-async function handleStandardDeobfuscation(interaction, code, detectionName) {
-    await interaction.editReply({ content: "🧠 **Pipeline Activated...**" });
-    const tempDir = path.join(__dirname, `pipeline_${Date.now()}`);
-    fs.mkdirSync(tempDir, { recursive: true });
-    try {
-        const pipelineResult = await Pipeline.runChain(code, tempDir, detectionName);
-        if (pipelineResult.code) {
-            await interaction.editReply({ content: `✅ **Complete!**`, files: [new AttachmentBuilder(Buffer.from(pipelineResult.code, "utf-8"), { name: "deobfuscated.lua" })] });
-        } else {
-            await interaction.editReply({ content: "❌ **Pipeline failed.**" });
-        }
-    } catch (err) {
-        await interaction.editReply({ content: `❌ **Error:** \`${err.message}\`` });
-    } finally {
-        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
-    }
-}
-
 client.once("ready", () => {
     Logger.log("SUCCESS", `Bot online: ${client.user.tag}`);
     registerCommands();
@@ -182,10 +164,6 @@ client.on("interactionCreate", async (interaction) => {
             const vmInfo = VMAnalyzer.analyze(code);
             const type = quickDetect.name;
 
-            if (type.includes("IronBrew") || type.includes("AztupBrew") || vmInfo.likelyFamily === "IronBrew" || code.includes("IronBrew")) {
-                return await handleIronBrew(interaction, code);
-            }
-
             if (type.includes("Moonsec") || code.includes("MoonSec")) {
                 return await handleMoonsec(interaction, code);
             }
@@ -194,7 +172,18 @@ client.on("interactionCreate", async (interaction) => {
                 return await handleWeAreDevs(interaction, code);
             }
 
-            await handleStandardDeobfuscation(interaction, code, type);
+            const isIronBrew = type.includes("IronBrew") || 
+                               type.includes("AztupBrew") || 
+                               vmInfo.likelyFamily === "IronBrew" || 
+                               code.includes("IronBrew") || 
+                               code.includes("getfenv") || 
+                               code.includes("return(function(...)");
+
+            if (isIronBrew) {
+                return await handleIronBrew(interaction, code);
+            }
+
+            return await interaction.editReply({ content: `❌ **Unknown Obfuscator.** The bot can't identify this script type.` });
         }
     } catch (error) {
         await interaction.editReply({ content: `❌ **Error:** ${error.message.slice(0, 1500)}` }).catch(() => {});
