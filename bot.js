@@ -24,10 +24,9 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const commands = [
     new SlashCommandBuilder().setName("deobf").setDescription("Deobfuscate Lua code directly").addStringOption(o => o.setName("code").setDescription("The obfuscated code").setRequired(true)).toJSON(),
     new SlashCommandBuilder().setName("deobf_url").setDescription("Deobfuscate Lua code from a URL").addStringOption(o => o.setName("url").setDescription("URL to raw script").setRequired(true)).toJSON(),
-    new SlashCommandBuilder().setName("deobf_file").setDescription("Deobfuscate Lua code from a file").addAttachmentOption(o => o.setName("file").setDescription("File (.lua/.txt)").setRequired(true)).toJSON(),
+    new SlashCommandBuilder().setName("deobf_file").setDescription("Deobfuscate Lua code from a file").addAttachmentOption(o => o.setName("file").setDescription("File").setRequired(true)).toJSON(),
     new SlashCommandBuilder().setName("detect").setDescription("Detect obfuscator type").addStringOption(o => o.setName("code").setDescription("Code").setRequired(false)).addStringOption(o => o.setName("url").setDescription("URL").setRequired(false)).addAttachmentOption(o => o.setName("file").setDescription("File").setRequired(false)).toJSON(),
-    new SlashCommandBuilder().setName("layers").setDescription("Analyze nested onion layers").addStringOption(o => o.setName("code").setDescription("Code").setRequired(true)).toJSON(),
-    new SlashCommandBuilder().setName("vmdetect").setDescription("Analyze VM structure").addStringOption(o => o.setName("code").setDescription("Code").setRequired(false)).addStringOption(o => o.setName("url").setDescription("URL").setRequired(false)).addAttachmentOption(o => o.setName("file").setDescription("File").setRequired(false)).toJSON(),
+    new SlashCommandBuilder().setName("vmdetect").setDescription("Analyze VM").addStringOption(o => o.setName("code").setDescription("Code").setRequired(false)).toJSON(),
     new SlashCommandBuilder().setName("help").setDescription("Show commands").toJSON(),
 ].map(c => c);
 
@@ -85,36 +84,43 @@ async function autoFetchFiles(urls, maxTotal = 5) {
     return files;
 }
 
-async function handleWeAreDevs(interaction, code) {
-    await interaction.editReply({ content: "⏳ **WeAreDevs Detected.** Running Prometheus..." });
-    const tempDir = path.join(__dirname, `wd_${Date.now()}`);
+async function handleIronBrew(interaction, code) {
+    await interaction.editReply({ content: "⏳ **IronBrew Detected.** Running..." });
+    const tempDir = path.join(__dirname, `ib_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
     const tempIn = path.join(tempDir, "input.lua");
     fs.writeFileSync(tempIn, code);
+    
     try {
-        const rawResult = await PythonBridge.run("wearedevs", tempIn);
-        if (typeof rawResult !== "string" || rawResult.length < 50) {
-            return interaction.editReply({ content: `❌ **WeAreDevs failed.** \`${String(rawResult).slice(0, 400)}\`` });
+        const result = await IronBrewBridge.run(tempIn);
+        
+        if (result && result.text && result.text.length > 50) {
+            await interaction.editReply({
+                content: `✅ **IronBrew Deobfuscated!**`,
+                files: [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })]
+            });
+            return;
         }
-        let finalCode = rawResult;
-        try {
-            const finalDeobf = new Deobfuscator(rawResult, { beautify: true });
-            await finalDeobf.run();
-            if (finalDeobf.code && finalDeobf.code.length > 50) finalCode = finalDeobf.code;
-        } catch (deobfErr) {}
-        const urls = extractUrls(finalCode);
-        const attachments = [new AttachmentBuilder(Buffer.from(finalCode, "utf-8"), { name: "deobfuscated.lua" })];
-        let extraMsg = "";
-        if (urls.length > 0) {
-            extraMsg = "\n\n🔗 **Nested URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
-            await interaction.editReply({ content: `✅ **WeAreDevs Deobfuscated!**\n⏳ Fetching nested files...${extraMsg}` });
-            const fetchedFiles = await autoFetchFiles(urls, 5);
-            for (const f of fetchedFiles) attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
-            if (fetchedFiles.length > 0) extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} nested file(s).**`;
-        }
-        await interaction.editReply({ content: `✅ **WeAreDevs Deobfuscated!**\n📦 ${attachments.length} file(s) attached.${extraMsg}`, files: attachments.slice(0, 10) });
+        
+        const embed = new EmbedBuilder()
+            .setTitle("❌ IronBrew — تقرير تشخيصي كامل")
+            .setColor(0xE74C3C)
+            .setDescription("البوت كشف السكربت كـ **IronBrew** وحاول يفكه، لكن الأداة فشلت. هذا التقرير يوضح بالضبط ما حدث:")
+            .addFields(
+                { name: "🔴 الخطأ", value: `\`\`\`${(result?.error || "غير معروف").slice(0, 200)}\`\`\``, inline: false },
+                { name: "📋 التفاصيل", value: `\`\`\`${(result?.details || "لا توجد تفاصيل").slice(0, 1000)}\`\`\``, inline: false },
+                { name: "🔍 التشخيص", value: `• تم كشف السكربت بواسطة: **Detector**\n• المسار المستخدم: **${result?.error?.includes("not found") ? "غير موجود" : "lua-deobfuscators"}**\n• النتيجة: **فشل**`, inline: false },
+                { name: "🛠️ ما الذي يحتاج إصلاح", value: "1. المسار للملف `.py` الرئيسي\n2. تثبيت مكتبات Python (`pip install -r requirements.txt`)\n3. صيغة الأمر الصحيحة (`python3 tool.py input`)", inline: false }
+            )
+            .setFooter({ text: "أرسل هذا التقرير كاملاً لفهم المشكلة" })
+            .setTimestamp();
+        
+        await interaction.editReply({ embeds: [embed] });
+        
     } catch (err) {
-        await interaction.editReply({ content: `❌ **Error:** \`${err.message.slice(0, 800)}\`` });
+        await interaction.editReply({
+            content: `❌ **IronBrew Crash:**\n\`\`\`${err.message.slice(0, 800)}\`\`\``
+        });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -129,17 +135,13 @@ async function handleMoonsec(interaction, code) {
     try {
         const result = await MoonsecBridge.run(tempIn);
         if (result && result.text && result.text.length > 50) {
-            const urls = result.urls || extractUrls(result.text);
             const attachments = [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })];
-            let extraMsg = "";
+            const urls = result.urls || extractUrls(result.text);
             if (urls.length > 0) {
-                extraMsg = "\n\n🔗 **Nested URLs:**\n" + urls.map(u => `- \`${u}\``).join("\n");
-                await interaction.editReply({ content: `✅ **Moonsec Deobfuscated!**\n⏳ Fetching nested files...${extraMsg}` });
                 const fetchedFiles = await autoFetchFiles(urls, 5);
                 for (const f of fetchedFiles) attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
-                if (fetchedFiles.length > 0) extraMsg += `\n\n📥 **Fetched ${fetchedFiles.length} nested file(s).**`;
             }
-            await interaction.editReply({ content: `✅ **Moonsec Deobfuscated!**\n📦 ${attachments.length} file(s) attached.${extraMsg}`, files: attachments.slice(0, 10) });
+            await interaction.editReply({ content: `✅ **Moonsec Deobfuscated!**`, files: attachments.slice(0, 10) });
         } else if (result && result.isBytecode) {
             await interaction.editReply({ content: "⚠️ **Bytecode extracted.** Upload to `luadec.dev`.", files: [new AttachmentBuilder(result.buffer, { name: "extracted.luac" })] });
         } else if (result && result.error) {
@@ -152,22 +154,32 @@ async function handleMoonsec(interaction, code) {
     }
 }
 
-async function handleIronBrew(interaction, code) {
-    await interaction.editReply({ content: "⏳ **IronBrew Detected.** Running tool..." });
-    const tempDir = path.join(__dirname, `ib_${Date.now()}`);
+async function handleWeAreDevs(interaction, code) {
+    await interaction.editReply({ content: "⏳ **WeAreDevs Detected.** Running..." });
+    const tempDir = path.join(__dirname, `wd_${Date.now()}`);
     fs.mkdirSync(tempDir, { recursive: true });
     const tempIn = path.join(tempDir, "input.lua");
     fs.writeFileSync(tempIn, code);
     try {
-        const result = await IronBrewBridge.run(tempIn);
-        if (result && result.text && result.text.length > 50) {
-            const attachments = [new AttachmentBuilder(Buffer.from(result.text, "utf-8"), { name: "deobfuscated.lua" })];
-            await interaction.editReply({ content: `✅ **IronBrew Deobfuscated!**`, files: attachments });
-        } else if (result && result.error) {
-            await interaction.editReply({ content: `❌ **IronBrew Error:** \`${result.error.slice(0, 800)}\`` });
+        const rawResult = await PythonBridge.run("wearedevs", tempIn);
+        if (typeof rawResult !== "string" || rawResult.length < 50) {
+            return interaction.editReply({ content: `❌ **WeAreDevs failed.** \`${String(rawResult).slice(0, 400)}\`` });
         }
+        let finalCode = rawResult;
+        try {
+            const finalDeobf = new Deobfuscator(rawResult, { beautify: true });
+            await finalDeobf.run();
+            if (finalDeobf.code && finalDeobf.code.length > 50) finalCode = finalDeobf.code;
+        } catch (e) {}
+        const attachments = [new AttachmentBuilder(Buffer.from(finalCode, "utf-8"), { name: "deobfuscated.lua" })];
+        const urls = extractUrls(finalCode);
+        if (urls.length > 0) {
+            const fetchedFiles = await autoFetchFiles(urls, 5);
+            for (const f of fetchedFiles) attachments.push(new AttachmentBuilder(f.buffer, { name: f.name }));
+        }
+        await interaction.editReply({ content: `✅ **WeAreDevs Deobfuscated!**`, files: attachments.slice(0, 10) });
     } catch (err) {
-        await interaction.editReply({ content: `❌ **IronBrew Error:** \`${err.message.slice(0, 800)}\`` });
+        await interaction.editReply({ content: `❌ **Error:** \`${err.message.slice(0, 800)}\`` });
     } finally {
         try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -203,7 +215,7 @@ client.on("interactionCreate", async (interaction) => {
 
     try {
         if (interaction.commandName === "help") {
-            return interaction.editReply({ content: "🤖 **Deobfuscator**\n`/deobf`, `/deobf_url`, `/deobf_file`, `/detect`, `/layers`, `/vmdetect`" });
+            return interaction.editReply({ content: "🤖 **Deobfuscator**\n`/deobf`, `/deobf_url`, `/deobf_file`, `/detect`, `/vmdetect`" });
         }
 
         if (interaction.commandName === "vmdetect") {
