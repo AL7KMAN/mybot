@@ -103,9 +103,10 @@ async function handleIronBrew(interaction, code) {
         }
         
         const reportText = `=== LM7H IRONBREW DIAGNOSTIC ===\n\nError: ${result?.error || "Unknown"}\n\nDetails:\n${result?.details || "No details provided"}\n\n===============================`;
+        const snippet = reportText.length > 1500 ? reportText.slice(0, 1500) + "\n... [تم اقتطاع الباقي في الملف]" : reportText;
         
         await interaction.editReply({
-            content: `❌ **IronBrew Failed.**\nThe full diagnostic report is attached below. You can also copy it directly from the code block:\n\n\`\`\`text\n${reportText}\n\`\`\``,
+            content: `❌ **IronBrew Failed.**\nالتقرير الكامل في الملف المرفق.\n\n\`\`\`text\n${snippet}\n\`\`\``,
             files: [new AttachmentBuilder(Buffer.from(reportText, "utf-8"), { name: "diagnostic_report.txt" })]
         });
         
