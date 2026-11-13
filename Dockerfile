@@ -49,4 +49,9 @@ RUN git clone https://github.com/HansWessels/unluac.git /app/unluac-src && \
 RUN git clone https://github.com/memcpython/lua-deobfuscators.git /app/lua-deobfuscators
 RUN git clone https://github.com/Linhqq/Lua-Deobfuscator.git /app/lua-deobfuscator-js
 
+# أداة IronBrew2Deobfuscator بلغة C#
+RUN git clone https://github.com/pirateware/IronbrewDeobfuscator.git /app/ironbrew-cs && \
+    cd /app/ironbrew-cs && \
+    dotnet build -c Release -o /app/ironbrew-bin
+
 CMD ["npm", "start"]
