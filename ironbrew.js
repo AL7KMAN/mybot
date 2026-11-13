@@ -3,63 +3,62 @@ const path = require("path");
 const fs = require("fs");
 
 class IronBrewBridge {
-    static findTool() {
-        const candidates = [
-            { path: path.join(__dirname, "lua-deobfuscator-js", "index.js"), runner: "node", useCwd: true },
-            { path: path.join(__dirname, "lua-deobfuscators", "IronBrew2Deobfuscator", "IronBrew2Deobfuscator.dll"), runner: "dotnet", useCwd: false },
-            { path: path.join(__dirname, "lua-deobfuscators", "IronBrew2Deobfuscator", "IronBrew2Deobfuscator.exe"), runner: "mono", useCwd: false }
-        ];
-
-        for (const candidate of candidates) {
-            if (fs.existsSync(candidate.path)) {
-                return candidate;
-            }
-        }
-        return { error: "No valid IronBrew tool found." };
-    }
-    
     static async run(inputFile) {
-        const tool = this.findTool();
-        if (tool.error) {
-            return { error: tool.error, details: `لم يتم العثور على أداة صالحة.` };
+        const toolDir = path.join(__dirname, "lua-deobfuscator-js");
+        const toolEntry = path.join(toolDir, "index.js");
+        
+        if (!fs.existsSync(toolEntry)) {
+            return { error: "Tool not found", details: `المسار المتوقع: ${toolEntry}` };
         }
+        
+        const toolInput = path.join(toolDir, "input.lua");
+        const toolOutput = path.join(toolDir, "output.lua");
+        
+        fs.copyFileSync(inputFile, toolInput);
+        if (fs.existsSync(toolOutput)) fs.unlinkSync(toolOutput);
         
         return new Promise((resolve) => {
             let proc;
             try {
-                const cwd = tool.useCwd ? path.dirname(inputFile) : __dirname;
-                const args = tool.useCwd ? [tool.path] : [tool.path, inputFile];
-                
-                proc = spawn(tool.runner, args, { 
+                proc = spawn("node", [toolEntry], { 
                     timeout: 120000, 
                     killSignal: 'SIGKILL',
-                    cwd: cwd
+                    cwd: toolDir
                 });
             } catch (spawnErr) {
-                return resolve({ error: "Spawn failed", details: `فشل تشغيل الأداة: ${spawnErr.message}` });
+                try { fs.unlinkSync(toolInput); } catch (e) {}
+                return resolve({ error: "Spawn failed", details: spawnErr.message });
             }
             
             let stdout = "", stderr = "";
             proc.stdout.on("data", (data) => { stdout += data.toString(); });
             proc.stderr.on("data", (data) => { stderr += data.toString(); });
             
-            proc.on("error", (err) => resolve({ error: "Process error", details: err.message }));
+            proc.on("error", (err) => {
+                try { fs.unlinkSync(toolInput); } catch (e) {}
+                resolve({ error: "Process error", details: err.message });
+            });
             
             proc.on("close", (code, signal) => {
-                if (signal === 'SIGKILL') {
-                    return resolve({ error: "Timeout", details: `الأداة تجاوزت 120 ثانية.` });
-                }
-                if (code === 0 && stdout.length > 50) {
-                    return resolve({ text: stdout });
+                let outputText = null;
+                
+                if (fs.existsSync(toolOutput) && fs.statSync(toolOutput).size > 50) {
+                    outputText = fs.readFileSync(toolOutput, "utf-8");
+                    try { fs.unlinkSync(toolOutput); } catch (e) {}
+                } else if (stdout.length > 100 && !stdout.includes("Error")) {
+                    outputText = stdout;
                 }
                 
-                // بعض الأدوات تحفظ النتيجة في ملف بدل الطباعة
-                const outFile = path.join(path.dirname(inputFile), "output.lua");
-                if (fs.existsSync(outFile) && fs.statSync(outFile).size > 50) {
-                    return resolve({ text: fs.readFileSync(outFile, "utf-8") });
+                try { fs.unlinkSync(toolInput); } catch (e) {}
+                
+                if (outputText) {
+                    return resolve({ text: outputText });
                 }
                 
-                resolve({ error: `Tool failed (exit code ${code})`, details: `STDERR:\n${stderr.slice(-800)}\nSTDOUT:\n${stdout.slice(-400)}` });
+                resolve({ 
+                    error: `Tool failed (exit code ${code})`, 
+                    details: `STDERR:\n${stderr.slice(-800)}\nSTDOUT:\n${stdout.slice(-400)}` 
+                });
             });
         });
     }
