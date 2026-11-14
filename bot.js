@@ -9,6 +9,7 @@ const { Logger, Detector, VMAnalyzer, AntiTamperDetector, Deobfuscator, fetchCod
 const { PythonBridge } = require('./tools.js');
 const { MoonsecBridge } = require('./moonsec.js');
 const { Pipeline } = require('./pipeline.js');
+const { Scraper } = require('./scraper.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -24,6 +25,7 @@ const commands = [
     new SlashCommandBuilder().setName("deobf").setDescription("Deobfuscate Lua code directly").addStringOption(o => o.setName("code").setDescription("The obfuscated code").setRequired(true)).toJSON(),
     new SlashCommandBuilder().setName("deobf_url").setDescription("Deobfuscate Lua code from a URL").addStringOption(o => o.setName("url").setDescription("URL to raw script").setRequired(true)).toJSON(),
     new SlashCommandBuilder().setName("deobf_file").setDescription("Deobfuscate Lua code from a file").addAttachmentOption(o => o.setName("file").setDescription("File").setRequired(true)).toJSON(),
+    new SlashCommandBuilder().setName("extract").setDescription("Extract Lua script from a protected website (e.g., encrypt-x.pages.dev)").addStringOption(o => o.setName("url").setDescription("URL of the protected page").setRequired(true)).toJSON(),
     new SlashCommandBuilder().setName("detect").setDescription("Detect obfuscator type").addStringOption(o => o.setName("code").setDescription("Code").setRequired(false)).addStringOption(o => o.setName("url").setDescription("URL").setRequired(false)).addAttachmentOption(o => o.setName("file").setDescription("File").setRequired(false)).toJSON(),
     new SlashCommandBuilder().setName("vmdetect").setDescription("Analyze VM").addStringOption(o => o.setName("code").setDescription("Code").setRequired(false)).toJSON(),
     new SlashCommandBuilder().setName("help").setDescription("Show commands").toJSON(),
@@ -47,6 +49,27 @@ async function resolveCode(interaction) {
     if (urlOpt) return { code: await fetchCodeFromUrl(urlOpt), source: "URL" };
     if (fileOpt) return { code: await readAttachment(fileOpt), source: "File" };
     throw new Error("You must provide code, a URL, or a file.");
+}
+
+async function handleExtract(interaction, url) {
+    await interaction.editReply({ content: "⏳ **Extracting script from protected page...**" });
+    try {
+        const result = await Scraper.extract(url);
+        if (result.success && result.script && result.script.length > 50) {
+            const attachments = [new AttachmentBuilder(Buffer.from(result.script, "utf-8"), { name: "extracted_script.lua" })];
+            
+            let extraMsg = `\n🔗 **Source:** ${result.source}`;
+            if (result.allUrls && result.allUrls.length > 0) {
+                extraMsg += `\n📡 **Network URLs found:**\n${result.allUrls.slice(0, 5).map(u => `- \`${u}\``).join("\n")}`;
+            }
+            
+            await interaction.editReply({ content: `✅ **Script Extracted!**\n📦 1 file attached.${extraMsg}`, files: attachments });
+        } else {
+            await interaction.editReply({ content: `❌ **Extraction failed:** ${result.error}` });
+        }
+    } catch (err) {
+        await interaction.editReply({ content: `❌ **Scraper Crash:** \`${err.message.slice(0, 800)}\`` });
+    }
 }
 
 async function handleMoonsec(interaction, code) {
@@ -125,7 +148,12 @@ client.on("interactionCreate", async (interaction) => {
 
     try {
         if (interaction.commandName === "help") {
-            return interaction.editReply({ content: "🤖 **Deobfuscator**\n`/deobf`, `/deobf_url`, `/deobf_file`, `/detect`" });
+            return interaction.editReply({ content: "🤖 **Deobfuscator**\n`/deobf`, `/deobf_url`, `/deobf_file`, `/extract`, `/detect`" });
+        }
+
+        if (interaction.commandName === "extract") {
+            const url = interaction.options.getString("url");
+            return await handleExtract(interaction, url);
         }
 
         if (["deobf", "deobf_url", "deobf_file"].includes(interaction.commandName)) {
