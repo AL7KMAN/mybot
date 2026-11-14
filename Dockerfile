@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     curl git python3.12 python3-pip python3.12-venv \
     wget default-jdk lua5.1 luarocks unzip build-essential \
     nodejs npm software-properties-common \
+    chromium-browser \
     && rm -rf /var/lib/apt/lists/*
 
 RUN luarocks install bit32 || true
@@ -23,6 +24,7 @@ WORKDIR /app
 COPY . .
 
 RUN npm install
+RUN npm install puppeteer
 
 RUN git clone https://github.com/prostone4/Prometheus-Deobfuscator.git /app/prometheus-deobf && \
     cd /app/prometheus-deobf && npm install
